@@ -2,7 +2,7 @@
   "name": "componi-back-nest",
   "version": "0.1.0",
   "description": "Componi — open-source social network for reusable UI components (NestJS backend)",
-  "author": "Componi",
+  "author": "Luiz Felipe Morisco",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
