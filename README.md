@@ -121,4 +121,5 @@ Never set `DATABASE_SYNCHRONIZE=true` in production — TypeORM's auto-sync will
 
 ## License
 
-MIT.
+Licensed under the [Apache License, Version 2.0](LICENSE). 
+See the [NOTICE](NOTICE) file for attribution information.
