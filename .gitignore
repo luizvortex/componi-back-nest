@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# build
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# logs
+logs/
+*.log
+
+# coverage
+coverage/
+.nyc_output/
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# misc
+.cache/
+.turbo/
+.next/
