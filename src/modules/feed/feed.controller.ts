@@ -2,7 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { OptionalAuth } from '../../common/decorators/optional-auth.decorator';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import { FeedService } from './feed.service';
@@ -18,7 +18,7 @@ export class FeedController {
     return this.service.forUser(user.id, query);
   }
 
-  @Public()
+  @OptionalAuth()
   @Get('trending')
   trending(@Query() query: PaginationDto) {
     return this.service.trending(query);

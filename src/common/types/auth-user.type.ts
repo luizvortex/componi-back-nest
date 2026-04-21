@@ -6,5 +6,7 @@ export interface AuthUser {
   id: string;
   email: string | null;
   githubUsername: string | null;
+  /** OAuth provider that minted this token: "github", "google", "email", … */
+  provider: string | null;
   claims: Record<string, unknown>;
 }

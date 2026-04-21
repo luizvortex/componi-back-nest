@@ -12,7 +12,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { OptionalAuth } from '../../common/decorators/optional-auth.decorator';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { CommentsService } from './comments.service';
@@ -23,7 +23,7 @@ import { CommentsService } from './comments.service';
 export class CommentsController {
   constructor(private readonly service: CommentsService) {}
 
-  @Public()
+  @OptionalAuth()
   @Get('components/:componentId/comments')
   list(@Param('componentId', ParseUUIDPipe) componentId: string) {
     return this.service.list(componentId);

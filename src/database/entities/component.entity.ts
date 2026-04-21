@@ -64,6 +64,17 @@ export class Component {
   @Column({ type: 'uuid', nullable: true })
   currentVersionId!: string | null;
 
+  /** Component this one was forked from. Powers the "remix lineage" graph. */
+  @Column({ type: 'uuid', nullable: true })
+  forkedFromId!: string | null;
+
+  @ManyToOne(() => Component, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'forkedFromId' })
+  forkedFrom!: Component | null;
+
+  @Column({ type: 'int', default: 0 })
+  forksCount!: number;
+
   @Column({ type: 'int', default: 0 })
   likesCount!: number;
 

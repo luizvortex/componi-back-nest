@@ -10,7 +10,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { OptionalAuth } from '../../common/decorators/optional-auth.decorator';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { PublishVersionDto } from './dto/publish-version.dto';
 import { VersionsService } from './versions.service';
@@ -21,7 +21,7 @@ import { VersionsService } from './versions.service';
 export class VersionsController {
   constructor(private readonly service: VersionsService) {}
 
-  @Public()
+  @OptionalAuth()
   @Get()
   list(
     @Param('componentId', ParseUUIDPipe) componentId: string,
@@ -30,7 +30,7 @@ export class VersionsController {
     return this.service.list(componentId, user);
   }
 
-  @Public()
+  @OptionalAuth()
   @Get(':version')
   findOne(
     @Param('componentId', ParseUUIDPipe) componentId: string,

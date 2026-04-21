@@ -70,15 +70,35 @@ src/
 
 ## Auth flow
 
-1. Frontend handles GitHub OAuth with `@supabase/supabase-js` — it never talks to Nest for login.
+1. Frontend handles OAuth with `@supabase/supabase-js` (GitHub **and/or** Google — both supported, see below) — it never talks to Nest for login.
 2. Every authenticated request sends `Authorization: Bearer <supabase-jwt>`.
 3. `SupabaseAuthGuard` (registered globally via `APP_GUARD`) validates the token and attaches `req.user: AuthUser`.
-4. Controllers access the user with `@CurrentUser()`. Public routes opt out via `@Public()`.
-5. On first authenticated request, `AuthService#getOrProvisionProfile` mirrors the Supabase `auth.users` row into our own `users` table so relations work.
+4. Controllers access the user with `@CurrentUser()`. Three decorator modes:
+   - default — auth required, 401 if missing/invalid
+   - `@OptionalAuth()` — auth attempted, valid token populates `req.user`, missing/invalid is silently ignored
+   - `@Public()` — auth never attempted (e.g., `/auth/health`)
+5. On first authenticated request, `AuthService#getOrProvisionProfile` mirrors the Supabase `auth.users` row into our own `users` table so relations work. The same is also done by a Postgres trigger (`supabase/rls.sql`) to remove the cold-start race.
 
 Two JWT verification strategies are supported (`SUPABASE_JWT_STRATEGY`):
 - `hs256` (default, simplest) — shared `SUPABASE_JWT_SECRET`
 - `jwks` (safer) — RS256 keys fetched from `SUPABASE_JWKS_URI`
+
+### Enabling Google OAuth
+
+In the Supabase dashboard:
+
+1. **Authentication → Providers → Google → Enable**.
+2. Create OAuth credentials in [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+   - Authorized JavaScript origin: your frontend URL.
+   - Authorized redirect URI: `https://<project-ref>.supabase.co/auth/v1/callback`.
+3. Paste Client ID + Client Secret into Supabase.
+
+The backend needs **zero code changes** — `SupabaseAuthGuard` validates whatever Supabase signs, and `AuthService` already reads Google's `full_name`, `name`, and `avatar_url` claims. The OAuth provider is exposed on `AuthUser.provider` for analytics or per-provider behavior if you want it.
+
+### Database setup
+
+1. `npm run migration:run` — applies `src/database/migrations/1745000000000-InitialSchema.ts` (creates 13 tables, indexes, foreign keys, partial unique indexes, trigram indexes for search).
+2. Open `supabase/rls.sql` and paste into Supabase → SQL Editor (or `psql $DATABASE_URL -f supabase/rls.sql`). This enables row-level security and installs the `auth.users → public.users` trigger.
 
 ## Database schema (13 tables)
 

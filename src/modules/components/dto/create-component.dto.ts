@@ -8,8 +8,14 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  Validate,
 } from 'class-validator';
 import type { ComponentFramework } from '../../../database/entities/component.entity';
+import {
+  COMPONENT_CODE_MAX_BYTES,
+  DependenciesConstraint,
+  MAX_TAG_SLUGS,
+} from './shared.validators';
 
 const FRAMEWORKS: ComponentFramework[] = ['react', 'vue', 'svelte', 'solid', 'angular', 'other'];
 
@@ -36,16 +42,20 @@ export class CreateComponentDto {
   @MaxLength(60)
   category?: string;
 
-  @ApiProperty({ description: 'Source code for the initial version (v1).' })
+  @ApiProperty({
+    description: `Source code for the initial version (v1). Capped at ${COMPONENT_CODE_MAX_BYTES} bytes.`,
+  })
   @IsString()
+  @MaxLength(COMPONENT_CODE_MAX_BYTES)
   code!: string;
 
   @ApiPropertyOptional({
-    description: 'Map of npm package → semver range.',
+    description: 'Map of npm package → semver range. Up to 50 entries, 8KB total.',
     example: { 'framer-motion': '^11.0.0' },
   })
   @IsOptional()
   @IsObject()
+  @Validate(DependenciesConstraint)
   dependencies?: Record<string, string>;
 
   @ApiPropertyOptional({ default: true })
@@ -53,9 +63,10 @@ export class CreateComponentDto {
   @IsBoolean()
   isPublic?: boolean;
 
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({ type: [String], maxItems: MAX_TAG_SLUGS })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(40, { each: true })
   tagSlugs?: string[];
 }

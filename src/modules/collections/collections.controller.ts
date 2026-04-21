@@ -12,7 +12,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { OptionalAuth } from '../../common/decorators/optional-auth.decorator';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { CreateCollectionDto } from './dto/create-collection.dto';
 import { CollectionsService } from './collections.service';
@@ -28,7 +28,7 @@ export class CollectionsController {
     return this.service.listForUser(user.id);
   }
 
-  @Public()
+  @OptionalAuth()
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user?: AuthUser) {
     return this.service.findOne(id, user);
