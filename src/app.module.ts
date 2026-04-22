@@ -10,6 +10,8 @@ import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
 import { RedisModule } from './common/redis/redis.module';
 import { CacheModule } from './common/cache/cache.module';
 import { QueueModule } from './common/queue/queue.module';
+import { SessionModule } from './common/session/session.module';
+import { AuditModule } from './common/audit/audit.module';
 import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
 import { UserAwareThrottlerGuard } from './common/throttler/user-aware-throttler.guard';
 
@@ -39,6 +41,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     RedisModule,
     CacheModule,
     QueueModule,
+    SessionModule,
+    AuditModule,
     ThrottlerModule.forRootAsync({
       inject: [ConfigService, RedisThrottlerStorage],
       useFactory: (config: ConfigService, storage: RedisThrottlerStorage) => ({

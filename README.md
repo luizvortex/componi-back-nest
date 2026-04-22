@@ -150,6 +150,70 @@ docker compose up -d redis
 
 For production, use managed Redis (Upstash, Redis Cloud, AWS ElastiCache). Set `REDIS_URL` to the connection string and `REDIS_TLS=true` if the provider requires TLS.
 
+## Moderation + admin
+
+The authorization model is role-based with three levels, defined in `users.role`:
+
+| Role        | Default for    | Grants                                                                   |
+| ----------- | -------------- | ------------------------------------------------------------------------ |
+| `user`      | every signup   | Publish / fork / like / follow. Cannot see moderation UI.                |
+| `moderator` | elevated staff | All of `user` + resolve reports, remove content, suspend up to 30 days.  |
+| `admin`     | founders/SRE   | All of `moderator` + permanent bans, role promotion, hard-delete users.  |
+
+Roles are enforced at three layers:
+
+1. **`@Roles('admin')` decorator + `RolesGuard`** — Nest route-level check.
+2. **`users.role` CHECK constraint** — the DB rejects any value outside the enum.
+3. **Postgres trigger `users_protect_privileged_columns`** — any UPDATE that touches `role`, `suspendedUntil`, or `suspensionReason` fails with `42501` unless the transaction sets `app.privileged_update = 'true'`. This catches stray `UPDATE users SET role = 'admin'` statements (including from a compromised service_role key).
+
+`SupabaseAuthGuard` hydrates `role` and `suspendedUntil` from the local `users` row on every request (Redis-cached 30s) — so a just-suspended user stops being able to act within 30 seconds, not when their JWT expires.
+
+### Bootstrapping the first admin
+
+After running migrations and creating your user via the frontend OAuth flow:
+
+```bash
+# 1. Generate a ≥ 32 char secret and store in your secrets manager.
+export ADMIN_BOOTSTRAP_SECRET='<secret>'
+
+# 2. Find your user id:
+#    SELECT id, username FROM users WHERE email = 'you@example.com';
+
+# 3. Run the promote script. --confirm must match the env var.
+npm run admin:promote -- \
+  --user-id <uuid> \
+  --role admin \
+  --reason "Founder bootstrap" \
+  --confirm "$ADMIN_BOOTSTRAP_SECRET"
+```
+
+The script opens a transaction, sets `app.privileged_update = 'true'`, performs the role change, and writes an `audit_logs` row attributed to the promoted user (metadata `via: 'cli'`). All subsequent promotions go through the admin API which attributes them to the acting admin.
+
+### Audit trail
+
+Every privileged mutation (suspend, ban, promote, delete content, erase user) is captured in `audit_logs` with:
+- `actorId` — the staff member who acted
+- `action` — machine-readable verb
+- `targetType` / `targetId` — what they acted on
+- `metadata` — structured context (never raw PII)
+- `reason` — required for destructive actions; < 10 chars is rejected by the CLI
+- `ipAddress` + `userAgent` — from the originating HTTP request
+
+The table is append-only: the Postgres trigger `audit_logs_append_only` raises `42501` on any UPDATE or DELETE, for **every** role including the superuser used by the backend. This satisfies LGPD Art. 37 ("registro das operações de tratamento"). Retention-driven cleanup is a DBA operation, not a code path.
+
+## Compliance (LGPD / GDPR)
+
+| Right                       | How Componi satisfies it                                   |
+| --------------------------- | ---------------------------------------------------------- |
+| Access (LGPD Art. 18 II)    | `GET /users/me/export` returns all of the user's data *(next etapa)* |
+| Rectification (Art. 18 III) | Profile edit endpoints (`PATCH /users/me`).                |
+| Erasure (Art. 18 VI)        | `DELETE /users/me` hard-deletes + enqueues purge of orphans *(next etapa)* |
+| Portability (Art. 18 V)     | Export endpoint emits JSON suitable for re-import elsewhere. |
+| Record of processing (Art. 37) | `audit_logs` + `users_protect_privileged_columns` trigger. |
+| Consent versioning          | ToS + Privacy Policy version on signup *(future)*.          |
+
+Defaults align with **GDPR** too — the field names are framework-agnostic, and the audit trail satisfies Art. 30 (records of processing activities).
+
 ### Enabling Google OAuth
 
 In the Supabase dashboard:

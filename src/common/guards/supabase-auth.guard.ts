@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -13,6 +14,7 @@ import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { IS_OPTIONAL_AUTH_KEY } from '../decorators/optional-auth.decorator';
+import { SessionService } from '../session/session.service';
 import type { AuthUser } from '../types/auth-user.type';
 import type { SupabaseJwtStrategy } from '../../config/supabase.config';
 
@@ -49,6 +51,7 @@ export class SupabaseAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly config: ConfigService,
+    private readonly sessions: SessionService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -71,16 +74,36 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing bearer token');
     }
 
+    let claims: SupabaseClaims;
     try {
-      const claims = await this.verify(token);
+      claims = await this.verify(token);
       if (!claims.sub) throw new Error('Token missing subject');
-      req.user = this.toAuthUser(claims);
-      return true;
     } catch (err) {
       this.logger.debug(`JWT verification failed: ${(err as Error).message}`);
       if (isOptional) return true;
       throw new UnauthorizedException('Invalid or expired token');
     }
+
+    // Hydrate role + suspension from the local users row (cached 30s).
+    // A valid JWT for a suspended user must still be rejected — the ban
+    // check cannot live in JWT claims because tokens last up to 1h.
+    const session = await this.sessions.hydrate(claims.sub as string);
+    if (!session) {
+      // Auth row not yet provisioned (first request after signup). Proceed
+      // as a default 'user' — AuthService will mirror the row shortly.
+      req.user = this.toAuthUser(claims, 'user', null);
+      return true;
+    }
+
+    if (session.suspendedUntil && session.suspendedUntil.getTime() > Date.now()) {
+      throw new ForbiddenException({
+        message: 'Account suspended',
+        suspendedUntil: session.suspendedUntil.toISOString(),
+      });
+    }
+
+    req.user = this.toAuthUser(claims, session.role, session.suspendedUntil);
+    return true;
   }
 
   private extractBearer(req: Request): string | null {
@@ -91,13 +114,19 @@ export class SupabaseAuthGuard implements CanActivate {
     return token.trim();
   }
 
-  private toAuthUser(claims: SupabaseClaims): AuthUser {
+  private toAuthUser(
+    claims: SupabaseClaims,
+    role: AuthUser['role'],
+    suspendedUntil: Date | null,
+  ): AuthUser {
     return {
       id: claims.sub as string,
       email: claims.email ?? null,
       githubUsername:
         claims.user_metadata?.user_name ?? claims.user_metadata?.preferred_username ?? null,
       provider: claims.app_metadata?.provider ?? null,
+      role,
+      suspendedUntil,
       claims,
     };
   }
