@@ -26,6 +26,7 @@ import { CollectionsModule } from './modules/collections/collections.module';
 import { FeedModule } from './modules/feed/feed.module';
 import { SearchModule } from './modules/search/search.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ModerationModule } from './modules/moderation/moderation.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     FeedModule,
     SearchModule,
     NotificationsModule,
+    ModerationModule,
   ],
   providers: [
     // Expose the Redis-backed storage so ThrottlerModule's async factory
