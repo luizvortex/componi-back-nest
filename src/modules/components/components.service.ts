@@ -14,6 +14,8 @@ import { ComponentTag } from '../../database/entities/component-tag.entity';
 import { Tag } from '../../database/entities/tag.entity';
 import { User } from '../../database/entities/user.entity';
 import type { AuthUser } from '../../common/types/auth-user.type';
+import { CacheService } from '../../common/cache/cache.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateComponentDto } from './dto/create-component.dto';
 import { ForkComponentDto } from './dto/fork-component.dto';
 import { ListComponentsDto } from './dto/list-components.dto';
@@ -30,6 +32,8 @@ export class ComponentsService {
     private readonly versions: Repository<ComponentVersion>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly config: ConfigService,
+    private readonly cache: CacheService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async create(user: AuthUser, dto: CreateComponentDto): Promise<Component> {
@@ -63,6 +67,7 @@ export class ComponentsService {
       }
 
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
+      await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
       return saved;
     });
   }
@@ -119,6 +124,17 @@ export class ComponentsService {
 
       await trx.getRepository(Component).increment({ id: parent.id }, 'forksCount', 1);
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
+
+      await this.notifications.enqueue(
+        parent.authorId,
+        'version',
+        { forkId: fork.id, parentId: parent.id, kind: 'fork' },
+        user.id,
+        `fork:${fork.id}`,
+      );
+      await Promise.all([
+        this.cache.invalidateTags(`component:${parent.id}`, 'feed:trending'),
+      ]);
       return fork;
     });
   }
@@ -162,15 +178,23 @@ export class ComponentsService {
   }
 
   async findById(id: string, user?: AuthUser): Promise<Component> {
-    const component = await this.components.findOne({
+    // Try the cache first — only public components end up here, so there's
+    // no risk of leaking private data across viewers.
+    const cached = await this.cache.get<Component>(`component:${id}:public`);
+    if (cached) return cached;
+
+    const found = await this.components.findOne({
       where: { id },
       relations: { author: true, componentTags: { tag: true } },
     });
-    if (!component) throw new NotFoundException('Component not found');
-    if (!component.isPublic && component.authorId !== user?.id) {
+    if (!found) throw new NotFoundException('Component not found');
+    if (!found.isPublic && found.authorId !== user?.id) {
       throw new NotFoundException('Component not found');
     }
-    return component;
+    if (found.isPublic) {
+      await this.cache.set(`component:${id}:public`, found, 120, [`component:${id}`]);
+    }
+    return found;
   }
 
   /** Walks the fork chain upward (parents) and downward (direct forks). */
@@ -215,7 +239,13 @@ export class ComponentsService {
     if (dto.category !== undefined) component.category = dto.category ?? null;
     if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
 
-    return this.components.save(component);
+    const saved = await this.components.save(component);
+    await this.cache.invalidateTags(
+      `component:${id}`,
+      `author:${user.id}`,
+      'feed:trending',
+    );
+    return saved;
   }
 
   async remove(id: string, user: AuthUser): Promise<void> {
@@ -226,6 +256,11 @@ export class ComponentsService {
       await trx.getRepository(Component).softRemove(component);
       await trx.getRepository(User).decrement({ id: user.id }, 'componentsCount', 1);
     });
+    await this.cache.invalidateTags(
+      `component:${id}`,
+      `author:${user.id}`,
+      'feed:trending',
+    );
   }
 
   async setThumbnail(id: string, user: AuthUser, thumbnailUrl: string): Promise<Component> {
@@ -234,7 +269,9 @@ export class ComponentsService {
     if (!component) throw new NotFoundException('Component not found');
     if (component.authorId !== user.id) throw new ForbiddenException();
     component.thumbnailUrl = thumbnailUrl;
-    return this.components.save(component);
+    const saved = await this.components.save(component);
+    await this.cache.invalidateTags(`component:${id}`, 'feed:trending');
+    return saved;
   }
 
   // ────────────────────────────────────────────────────────────────────

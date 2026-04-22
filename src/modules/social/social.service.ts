@@ -11,6 +11,7 @@ import { Favorite } from '../../database/entities/favorite.entity';
 import { Follow } from '../../database/entities/follow.entity';
 import { Component } from '../../database/entities/component.entity';
 import { User } from '../../database/entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class SocialService {
@@ -19,71 +20,98 @@ export class SocialService {
     @InjectRepository(Favorite) private readonly favorites: Repository<Favorite>,
     @InjectRepository(Follow) private readonly follows: Repository<Follow>,
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async like(userId: string, componentId: string): Promise<void> {
-    await this.dataSource.transaction(async (trx) => {
-      const component = await trx.getRepository(Component).findOne({ where: { id: componentId } });
-      if (!component) throw new NotFoundException('Component not found');
+    const component = await this.dataSource.transaction(async (trx) => {
+      const target = await trx.getRepository(Component).findOne({ where: { id: componentId } });
+      if (!target) throw new NotFoundException('Component not found');
       const existing = await trx.getRepository(Like).findOne({ where: { userId, componentId } });
-      if (existing) return;
+      if (existing) return null;
       await trx.getRepository(Like).insert({ userId, componentId });
-      await trx
-        .getRepository(Component)
-        .increment({ id: componentId }, 'likesCount', 1);
+      await trx.getRepository(Component).increment({ id: componentId }, 'likesCount', 1);
+      return target;
     });
+
+    if (component) {
+      // dedupe so rapid unlike/relike doesn't spam the target's inbox.
+      await this.notifications.enqueue(
+        component.authorId,
+        'like',
+        { componentId },
+        userId,
+        `like:${userId}:${componentId}`,
+      );
+    }
   }
 
   async unlike(userId: string, componentId: string): Promise<void> {
     await this.dataSource.transaction(async (trx) => {
       const result = await trx.getRepository(Like).delete({ userId, componentId });
       if (result.affected) {
-        await trx
-          .getRepository(Component)
-          .decrement({ id: componentId }, 'likesCount', 1);
+        await trx.getRepository(Component).decrement({ id: componentId }, 'likesCount', 1);
       }
     });
   }
 
   async favorite(userId: string, componentId: string): Promise<void> {
-    await this.dataSource.transaction(async (trx) => {
-      const component = await trx.getRepository(Component).findOne({ where: { id: componentId } });
-      if (!component) throw new NotFoundException('Component not found');
+    const component = await this.dataSource.transaction(async (trx) => {
+      const target = await trx.getRepository(Component).findOne({ where: { id: componentId } });
+      if (!target) throw new NotFoundException('Component not found');
       const existing = await trx
         .getRepository(Favorite)
         .findOne({ where: { userId, componentId } });
-      if (existing) return;
+      if (existing) return null;
       await trx.getRepository(Favorite).insert({ userId, componentId });
-      await trx
-        .getRepository(Component)
-        .increment({ id: componentId }, 'favoritesCount', 1);
+      await trx.getRepository(Component).increment({ id: componentId }, 'favoritesCount', 1);
+      return target;
     });
+
+    if (component) {
+      await this.notifications.enqueue(
+        component.authorId,
+        'favorite',
+        { componentId },
+        userId,
+        `favorite:${userId}:${componentId}`,
+      );
+    }
   }
 
   async unfavorite(userId: string, componentId: string): Promise<void> {
     await this.dataSource.transaction(async (trx) => {
       const result = await trx.getRepository(Favorite).delete({ userId, componentId });
       if (result.affected) {
-        await trx
-          .getRepository(Component)
-          .decrement({ id: componentId }, 'favoritesCount', 1);
+        await trx.getRepository(Component).decrement({ id: componentId }, 'favoritesCount', 1);
       }
     });
   }
 
   async follow(followerId: string, followeeId: string): Promise<void> {
     if (followerId === followeeId) throw new BadRequestException('Cannot follow yourself');
-    await this.dataSource.transaction(async (trx) => {
+    const created = await this.dataSource.transaction(async (trx) => {
       const target = await trx.getRepository(User).findOne({ where: { id: followeeId } });
       if (!target) throw new NotFoundException('User not found');
       const existing = await trx
         .getRepository(Follow)
         .findOne({ where: { followerId, followeeId } });
-      if (existing) return;
+      if (existing) return false;
       await trx.getRepository(Follow).insert({ followerId, followeeId });
       await trx.getRepository(User).increment({ id: followerId }, 'followingCount', 1);
       await trx.getRepository(User).increment({ id: followeeId }, 'followersCount', 1);
+      return true;
     });
+
+    if (created) {
+      await this.notifications.enqueue(
+        followeeId,
+        'follow',
+        {},
+        followerId,
+        `follow:${followerId}:${followeeId}`,
+      );
+    }
   }
 
   async unfollow(followerId: string, followeeId: string): Promise<void> {
