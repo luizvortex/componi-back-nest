@@ -17,6 +17,10 @@ import { Collection } from './entities/collection.entity';
 import { CollectionComponent } from './entities/collection-component.entity';
 import { Share } from './entities/share.entity';
 import { Notification } from './entities/notification.entity';
+import { Block } from './entities/block.entity';
+import { Mute } from './entities/mute.entity';
+import { Report } from './entities/report.entity';
+import { AuditLog } from './entities/audit-log.entity';
 
 loadEnv({ path: '.env.local' });
 loadEnv();
@@ -35,6 +39,10 @@ export const entities = [
   CollectionComponent,
   Share,
   Notification,
+  Block,
+  Mute,
+  Report,
+  AuditLog,
 ];
 
 export const typeOrmConfigFactory = (config: ConfigService): TypeOrmModuleOptions => ({
