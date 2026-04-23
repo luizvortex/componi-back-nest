@@ -21,7 +21,7 @@ export class FeedService {
     this.feedTtl = config.get<number>('redis.cache.feedTtlSeconds', 30);
   }
 
-  /** Components from users the viewer follows, most-recent first. */
+  /** Components from users the viewer follows, most-recent first. Blocked and muted authors are excluded. */
   forUser(userId: string, query: PaginationDto): Promise<Component[]> {
     // Per-user cache key so one user's personalized feed never leaks
     // into another's. Short TTL because followers expect new posts fast.
@@ -36,6 +36,19 @@ export class FeedService {
           })
           .where('c.isPublic = true')
           .andWhere('c.deletedAt IS NULL')
+          .andWhere(
+            `NOT EXISTS (
+              SELECT 1 FROM blocks b
+              WHERE (b."blockerId" = :uid AND b."blockedId" = c."authorId")
+                 OR (b."blockerId" = c."authorId" AND b."blockedId" = :uid)
+            )`,
+          )
+          .andWhere(
+            `NOT EXISTS (
+              SELECT 1 FROM mutes m
+              WHERE m."muterId" = :uid AND m."mutedId" = c."authorId"
+            )`,
+          )
           .orderBy('c.createdAt', 'DESC')
           .take(query.limit)
           .getMany(),
@@ -43,9 +56,13 @@ export class FeedService {
     );
   }
 
-  trending(query: PaginationDto): Promise<Component[]> {
+  /**
+   * Shared trending feed. When viewerId is provided the result is post-filtered
+   * in memory so blocked authors are hidden without busting the shared cache.
+   */
+  async trending(query: PaginationDto, viewerId?: string): Promise<Component[]> {
     // Shared across all viewers — one cache entry per limit bucket.
-    return this.cache.wrap(
+    const results = await this.cache.wrap(
       `feed:trending:${query.limit ?? 20}`,
       () =>
         this.components
@@ -59,5 +76,26 @@ export class FeedService {
           .getMany(),
       { ttlSeconds: this.feedTtl, tags: ['feed:trending'] },
     );
+
+    if (!viewerId) return results;
+
+    // Post-filter: remove components whose authors have a block relationship
+    // with the viewer. Done in-memory so the shared cache entry is preserved.
+    const filtered: Component[] = [];
+    for (const c of results) {
+      if (c.authorId === viewerId) {
+        filtered.push(c);
+        continue;
+      }
+      const blocked = await this.components.query(
+        `SELECT 1 FROM blocks b
+         WHERE (b."blockerId" = $1 AND b."blockedId" = $2)
+            OR (b."blockerId" = $2 AND b."blockedId" = $1)
+         LIMIT 1`,
+        [viewerId, c.authorId],
+      );
+      if (!blocked.length) filtered.push(c);
+    }
+    return filtered;
   }
 }

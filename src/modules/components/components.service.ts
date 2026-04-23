@@ -15,6 +15,7 @@ import { Tag } from '../../database/entities/tag.entity';
 import { User } from '../../database/entities/user.entity';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { CacheService } from '../../common/cache/cache.service';
+import { BlocksService } from '../moderation/blocks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateComponentDto } from './dto/create-component.dto';
 import { ForkComponentDto } from './dto/fork-component.dto';
@@ -33,6 +34,7 @@ export class ComponentsService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly config: ConfigService,
     private readonly cache: CacheService,
+    private readonly blocks: BlocksService,
     private readonly notifications: NotificationsService,
   ) {}
 
@@ -79,6 +81,9 @@ export class ComponentsService {
         .findOne({ where: { id: parentId }, relations: { componentTags: { tag: true } } });
       if (!parent || parent.deletedAt) throw new NotFoundException('Component not found');
       if (!parent.isPublic && parent.authorId !== user.id) {
+        throw new NotFoundException('Component not found');
+      }
+      if (parent.authorId !== user.id && await this.blocks.isBlockedEitherWay(user.id, parent.authorId)) {
         throw new NotFoundException('Component not found');
       }
 
@@ -147,6 +152,13 @@ export class ComponentsService {
 
     if (user) {
       qb.andWhere('(c.isPublic = true OR c.authorId = :uid)', { uid: user.id });
+      qb.andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b."blockerId" = :uid AND b."blockedId" = c."authorId")
+             OR (b."blockerId" = c."authorId" AND b."blockedId" = :uid)
+        )`,
+      );
     } else {
       qb.andWhere('c.isPublic = true');
     }
@@ -181,7 +193,12 @@ export class ComponentsService {
     // Try the cache first — only public components end up here, so there's
     // no risk of leaking private data across viewers.
     const cached = await this.cache.get<Component>(`component:${id}:public`);
-    if (cached) return cached;
+    if (cached) {
+      if (user && user.id !== cached.authorId && await this.blocks.isBlockedEitherWay(user.id, cached.authorId)) {
+        throw new NotFoundException('Component not found');
+      }
+      return cached;
+    }
 
     const found = await this.components.findOne({
       where: { id },
@@ -189,6 +206,9 @@ export class ComponentsService {
     });
     if (!found) throw new NotFoundException('Component not found');
     if (!found.isPublic && found.authorId !== user?.id) {
+      throw new NotFoundException('Component not found');
+    }
+    if (user && user.id !== found.authorId && await this.blocks.isBlockedEitherWay(user.id, found.authorId)) {
       throw new NotFoundException('Component not found');
     }
     if (found.isPublic) {

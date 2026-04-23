@@ -11,6 +11,7 @@ import { Favorite } from '../../database/entities/favorite.entity';
 import { Follow } from '../../database/entities/follow.entity';
 import { Component } from '../../database/entities/component.entity';
 import { User } from '../../database/entities/user.entity';
+import { BlocksService } from '../moderation/blocks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
@@ -20,6 +21,7 @@ export class SocialService {
     @InjectRepository(Favorite) private readonly favorites: Repository<Favorite>,
     @InjectRepository(Follow) private readonly follows: Repository<Follow>,
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly blocks: BlocksService,
     private readonly notifications: NotificationsService,
   ) {}
 
@@ -27,6 +29,9 @@ export class SocialService {
     const component = await this.dataSource.transaction(async (trx) => {
       const target = await trx.getRepository(Component).findOne({ where: { id: componentId } });
       if (!target) throw new NotFoundException('Component not found');
+      if (target.authorId !== userId && await this.blocks.isBlockedEitherWay(userId, target.authorId)) {
+        throw new NotFoundException('Component not found');
+      }
       const existing = await trx.getRepository(Like).findOne({ where: { userId, componentId } });
       if (existing) return null;
       await trx.getRepository(Like).insert({ userId, componentId });
@@ -59,6 +64,9 @@ export class SocialService {
     const component = await this.dataSource.transaction(async (trx) => {
       const target = await trx.getRepository(Component).findOne({ where: { id: componentId } });
       if (!target) throw new NotFoundException('Component not found');
+      if (target.authorId !== userId && await this.blocks.isBlockedEitherWay(userId, target.authorId)) {
+        throw new NotFoundException('Component not found');
+      }
       const existing = await trx
         .getRepository(Favorite)
         .findOne({ where: { userId, componentId } });
@@ -93,6 +101,9 @@ export class SocialService {
     const created = await this.dataSource.transaction(async (trx) => {
       const target = await trx.getRepository(User).findOne({ where: { id: followeeId } });
       if (!target) throw new NotFoundException('User not found');
+      if (await this.blocks.isBlockedEitherWay(followerId, followeeId)) {
+        throw new NotFoundException('User not found');
+      }
       const existing = await trx
         .getRepository(Follow)
         .findOne({ where: { followerId, followeeId } });
