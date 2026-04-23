@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -248,7 +247,9 @@ export class ComponentsService {
   async update(id: string, user: AuthUser, dto: UpdateComponentDto): Promise<Component> {
     const component = await this.components.findOne({ where: { id } });
     if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new ForbiddenException();
+    // 404 (not 403) on ownership mismatch so the endpoint doesn't
+    // double as a resource-existence oracle for other users' IDs.
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
 
     if (dto.name && dto.name !== component.name) {
       component.name = dto.name;
@@ -271,7 +272,7 @@ export class ComponentsService {
   async remove(id: string, user: AuthUser): Promise<void> {
     const component = await this.components.findOne({ where: { id } });
     if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new ForbiddenException();
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
     await this.dataSource.transaction(async (trx) => {
       await trx.getRepository(Component).softRemove(component);
       await trx.getRepository(User).decrement({ id: user.id }, 'componentsCount', 1);
@@ -287,7 +288,7 @@ export class ComponentsService {
     this.assertThumbnailOriginAllowed(thumbnailUrl);
     const component = await this.components.findOne({ where: { id } });
     if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new ForbiddenException();
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
     component.thumbnailUrl = thumbnailUrl;
     const saved = await this.components.save(component);
     await this.cache.invalidateTags(`component:${id}`, 'feed:trending');

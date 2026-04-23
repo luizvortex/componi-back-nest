@@ -1,5 +1,4 @@
 import {
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -46,7 +45,7 @@ export class CommentsService {
   async remove(id: string, user: AuthUser): Promise<void> {
     const comment = await this.comments.findOne({ where: { id } });
     if (!comment) throw new NotFoundException('Comment not found');
-    if (comment.authorId !== user.id) throw new ForbiddenException();
+    if (comment.authorId !== user.id) throw new NotFoundException('Comment not found');
     await this.dataSource.transaction(async (trx) => {
       await trx.getRepository(Comment).softRemove(comment);
       await trx
