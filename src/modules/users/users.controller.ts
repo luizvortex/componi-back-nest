@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Post,
   Req,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -18,6 +19,8 @@ import { Public } from '../../common/decorators/public.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { AccountPrivacyService } from './account-privacy.service';
+import { ConsentService } from './consent.service';
+import { AcceptConsentDto } from './dto/accept-consent.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
 
@@ -28,6 +31,7 @@ export class UsersController {
   constructor(
     private readonly service: UsersService,
     private readonly privacy: AccountPrivacyService,
+    private readonly consent: ConsentService,
   ) {}
 
   @Public()
@@ -53,5 +57,17 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   deleteMe(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.privacy.deleteAccount(AuditService.contextFromRequest(user, req));
+  }
+
+  /** LGPD Art. 8º — current consent status; used by the frontend prompt. */
+  @Get('me/consent')
+  getConsent(@CurrentUser() user: AuthUser) {
+    return this.consent.getStatus(user.id);
+  }
+
+  /** Records acceptance of the server-side current privacy/terms versions. */
+  @Post('me/consent')
+  acceptConsent(@CurrentUser() user: AuthUser, @Body() dto: AcceptConsentDto) {
+    return this.consent.accept(user.id, dto);
   }
 }

@@ -80,6 +80,24 @@ export class User {
   @Column({ type: 'text', nullable: true })
   suspensionReason!: string | null;
 
+  /**
+   * Consent ledger. A null here means the user hasn't yet accepted the
+   * current policy revision — the frontend should prompt on next login.
+   * Version strings mirror the `Version:` header in docs/PRIVACY.md and
+   * docs/TERMS.md and are sourced from config.compliance.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  privacyAcceptedAt!: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  privacyAcceptedVersion!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  termsAcceptedAt!: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  termsAcceptedVersion!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

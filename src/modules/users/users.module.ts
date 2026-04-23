@@ -16,6 +16,7 @@ import { Report } from '../../database/entities/report.entity';
 import { Share } from '../../database/entities/share.entity';
 import { User } from '../../database/entities/user.entity';
 import { AccountPrivacyService } from './account-privacy.service';
+import { ConsentService } from './consent.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 
@@ -39,7 +40,7 @@ import { UsersService } from './users.service';
     ]),
   ],
   controllers: [UsersController],
-  providers: [UsersService, AccountPrivacyService],
+  providers: [UsersService, AccountPrivacyService, ConsentService],
   exports: [UsersService],
 })
 export class UsersModule {}
