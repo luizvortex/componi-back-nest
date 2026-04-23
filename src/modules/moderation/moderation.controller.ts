@@ -15,7 +15,9 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { BlocksService } from './blocks.service';
 import { MutesService } from './mutes.service';
+import { ReportsService } from './reports.service';
 import { CreateBlockDto } from './dto/create-block.dto';
+import { CreateReportDto } from './dto/create-report.dto';
 
 /**
  * All endpoints here are self-scoped — the caller can only mutate their
@@ -30,6 +32,7 @@ export class ModerationController {
   constructor(
     private readonly blocks: BlocksService,
     private readonly mutes: MutesService,
+    private readonly reports: ReportsService,
   ) {}
 
   // ── blocks ────────────────────────────────────────────────────────────
@@ -81,5 +84,19 @@ export class ModerationController {
     @Param('userId', ParseUUIDPipe) targetId: string,
   ) {
     return this.mutes.unmute(user.id, targetId);
+  }
+
+  // ── reports (intake) ──────────────────────────────────────────────────
+  // The admin-facing report queue lives at /admin/reports.
+
+  @Post('reports')
+  @HttpCode(HttpStatus.CREATED)
+  report(@CurrentUser() user: AuthUser, @Body() dto: CreateReportDto) {
+    return this.reports.create(user.id, dto);
+  }
+
+  @Get('reports/mine')
+  myReports(@CurrentUser() user: AuthUser) {
+    return this.reports.listMine(user.id);
   }
 }
