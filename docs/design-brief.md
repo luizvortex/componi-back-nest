@@ -36,25 +36,65 @@ Design for someone who already uses Linear, Vercel, Raycast, GitHub, shadcn/ui, 
 
 ### Color tokens (HEX)
 
-Dark mode is primary — design in dark first, adapt to light.
+Both dark and light modes are first-class. Design dark-first, then validate every surface in light.
 
-```
---bg-canvas        dark #0A0B0D   light #FAFAFA
---bg-surface       dark #12141A   light #FFFFFF
---bg-elevated      dark #1A1D24   light #F4F4F5
---border-subtle    dark #23262D   light #E4E4E7
---border-strong    dark #2E323B   light #D4D4D8
---fg-primary       dark #F5F5F7   light #0A0A0A
---fg-secondary     dark #A1A1AA   light #52525B
---fg-muted         dark #71717A   light #71717A
---accent           #7C3AED  (electric violet — one accent, used sparingly for hero actions)
---accent-fg        #FFFFFF
---success          dark #34D399   light #059669
---warn             dark #F59E0B   light #D97706
---danger           dark #F87171   light #DC2626
+#### Dark mode (default)
+
+```css
+/* tokens.css — dark */
+--bg-canvas:     #0A0B0D;
+--bg-surface:    #12141A;
+--bg-elevated:   #1A1D24;
+--border-subtle: #23262D;
+--border-strong: #2E323B;
+--fg-primary:    #F5F5F7;
+--fg-secondary:  #A1A1AA;
+--fg-muted:      #71717A;
+--accent:        #8B1A2F;   /* vermelho vinho — uma cor, uma função */
+--accent-hover:  #A31F37;   /* 15% mais claro para hover */
+--accent-muted:  #3D0B14;   /* 20% opacidade para fundos de seleção */
+--accent-fg:     #FFFFFF;
+--success:       #34D399;
+--warn:          #F59E0B;
+--danger:        #F87171;
 ```
 
-Rule: one accent, one job. Violet is reserved for primary actions, selection states, and the "fork" gesture. Never as a background fill for whole sections.
+#### Light mode (default)
+
+```css
+/* tokens.css — light */
+--bg-canvas:     #FAFAFA;
+--bg-surface:    #FFFFFF;
+--bg-elevated:   #F4F4F5;
+--border-subtle: #E4E4E7;
+--border-strong: #D4D4D8;
+--fg-primary:    #0A0A0A;
+--fg-secondary:  #52525B;
+--fg-muted:      #71717A;
+--accent:        #8B1A2F;   /* mesmo tom — contraste 4.8:1 sobre branco, passa AA */
+--accent-hover:  #701525;   /* 15% mais escuro para hover */
+--accent-muted:  #F9E5E8;   /* tint suave para fundos de seleção */
+--accent-fg:     #FFFFFF;
+--success:       #059669;
+--warn:          #D97706;
+--danger:        #DC2626;
+```
+
+#### Theming via `data-theme`
+
+```html
+<html data-theme="dark">
+<html data-theme="light">   <!-- padrão -->
+```
+
+```css
+[data-theme="light"] {
+  --bg-canvas: #FAFAFA;
+  /* … demais overrides acima … */
+}
+```
+
+Rule: one accent, one job. Vermelho vinho (`--accent`) é reservado para ações primárias, estados de seleção e o gesto "fork". Nunca como preenchimento de fundo de seções inteiras.
 
 ### Typography
 
