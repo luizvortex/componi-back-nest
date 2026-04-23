@@ -77,25 +77,24 @@ export class FeedService {
       { ttlSeconds: this.feedTtl, tags: ['feed:trending'] },
     );
 
-    if (!viewerId) return results;
+    if (!viewerId || !results.length) return results;
 
-    // Post-filter: remove components whose authors have a block relationship
-    // with the viewer. Done in-memory so the shared cache entry is preserved.
-    const filtered: Component[] = [];
-    for (const c of results) {
-      if (c.authorId === viewerId) {
-        filtered.push(c);
-        continue;
-      }
-      const blocked = await this.components.query(
-        `SELECT 1 FROM blocks b
-         WHERE (b."blockerId" = $1 AND b."blockedId" = $2)
-            OR (b."blockerId" = $2 AND b."blockedId" = $1)
-         LIMIT 1`,
-        [viewerId, c.authorId],
-      );
-      if (!blocked.length) filtered.push(c);
-    }
-    return filtered;
+    // Post-filter blocks in a single round-trip: collect the distinct
+    // authors, ask Postgres for the subset that has a block relationship
+    // either way with the viewer, then drop those rows in memory. This
+    // is O(1) queries regardless of page size (previously O(n)).
+    const authorIds = Array.from(new Set(results.map((c) => c.authorId).filter((id) => id !== viewerId)));
+    if (!authorIds.length) return results;
+
+    const blockedRows = (await this.components.query(
+      `SELECT DISTINCT CASE WHEN b."blockerId" = $1 THEN b."blockedId" ELSE b."blockerId" END AS "otherId"
+       FROM blocks b
+       WHERE (b."blockerId" = $1 AND b."blockedId" = ANY($2::uuid[]))
+          OR (b."blockedId" = $1 AND b."blockerId" = ANY($2::uuid[]))`,
+      [viewerId, authorIds],
+    )) as Array<{ otherId: string }>;
+    const blockedSet = new Set(blockedRows.map((r) => r.otherId));
+
+    return results.filter((c) => c.authorId === viewerId || !blockedSet.has(c.authorId));
   }
 }

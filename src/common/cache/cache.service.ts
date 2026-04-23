@@ -15,6 +15,15 @@ import { REDIS_CLIENT } from '../redis/redis.constants';
  *   We pay one extra SADD on write in exchange for O(1) invalidation
  *   of related entries (e.g. every cached view of component 123).
  */
+/**
+ * Hard ceiling on a single cached value. Feed/list payloads that blow
+ * past this are almost always a sign of an unbounded query slipping in;
+ * we refuse to cache and log loudly so it shows up in the dashboards.
+ * 256 KB is ~200 components with their author joined, which is already
+ * well over any page size the frontend requests.
+ */
+const MAX_PAYLOAD_BYTES = 256 * 1024;
+
 @Injectable()
 export class CacheService {
   private readonly logger = new Logger(CacheService.name);
@@ -44,8 +53,17 @@ export class CacheService {
     tags: string[] = [],
   ): Promise<void> {
     try {
+      const payload = JSON.stringify(value);
+      // Buffer.byteLength is UTF-8-aware, unlike payload.length.
+      const bytes = Buffer.byteLength(payload, 'utf8');
+      if (bytes > MAX_PAYLOAD_BYTES) {
+        this.logger.warn(
+          `set ${key} skipped: payload ${bytes}B exceeds ${MAX_PAYLOAD_BYTES}B cap`,
+        );
+        return;
+      }
       const pipeline = this.redis.multi();
-      pipeline.set(this.k(key), JSON.stringify(value), 'EX', ttlSeconds);
+      pipeline.set(this.k(key), payload, 'EX', ttlSeconds);
       for (const tag of tags) {
         pipeline.sadd(this.tagKey(tag), this.k(key));
         pipeline.expire(this.tagKey(tag), ttlSeconds * 2);
