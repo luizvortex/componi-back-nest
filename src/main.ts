@@ -5,11 +5,15 @@ import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
 import helmet from 'helmet';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // Replace the default Nest logger with Pino so bootstrap + request
+  // logs share structure and request-id correlation.
+  app.useLogger(app.get(Logger));
   const config = app.get(ConfigService);
 
   // Forwards SIGTERM/SIGINT to @nestjs OnApplicationShutdown hooks

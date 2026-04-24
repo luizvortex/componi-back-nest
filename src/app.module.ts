@@ -9,6 +9,7 @@ import { envValidationSchema } from './config/env.validation';
 import { typeOrmConfigFactory } from './database/data-source';
 import { ConsentGuard } from './common/guards/consent.guard';
 import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
+import { LoggerModule } from './common/logger/logger.module';
 import { RedisModule } from './common/redis/redis.module';
 import { CacheModule } from './common/cache/cache.module';
 import { QueueModule } from './common/queue/queue.module';
@@ -45,6 +46,7 @@ import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
       validationSchema: envValidationSchema,
       validationOptions: { allowUnknown: true, abortEarly: false },
     }),
+    LoggerModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: typeOrmConfigFactory,
