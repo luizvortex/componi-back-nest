@@ -15,6 +15,15 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
+# Pre-fetch the embedding model into the image so a cold container
+# doesn't spend 20s + 130 MB of egress downloading it on first request.
+# Skipped if EMBEDDINGS_ENABLED=false at build time.
+ARG EMBEDDINGS_ENABLED=true
+ARG EMBEDDINGS_MODEL=Xenova/multilingual-e5-small
+RUN if [ "$EMBEDDINGS_ENABLED" = "true" ]; then \
+      node -e "(async()=>{const {pipeline,env}=await import('@xenova/transformers');env.cacheDir='/app/.hf-cache';await pipeline('feature-extraction','${EMBEDDINGS_MODEL}',{quantized:true});})()" ; \
+    fi
+
 # ─── Stage 3: runtime, prod deps only ─────────────────────────────────
 FROM node:20-alpine AS runtime
 WORKDIR /app
@@ -28,6 +37,10 @@ COPY --from=build /app/dist ./dist
 # Keep docs alongside the image so anything that links /docs/PRIVACY.md
 # at runtime (Swagger enrichment, static serve) can resolve it.
 COPY --from=build /app/docs ./docs
+# Pre-fetched ONNX model cache from the build stage — skipped if the
+# build stage didn't run the pre-fetch (EMBEDDINGS_ENABLED=false).
+COPY --from=build /app/.hf-cache /app/.hf-cache
+ENV TRANSFORMERS_CACHE=/app/.hf-cache
 USER componi
 EXPOSE 3000
 # dumb-init as PID 1 forwards signals; SIGTERM flows to Node, which

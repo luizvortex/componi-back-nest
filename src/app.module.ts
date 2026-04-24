@@ -12,6 +12,7 @@ import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
 import { LoggerModule } from './common/logger/logger.module';
 import { RedisModule } from './common/redis/redis.module';
 import { CacheModule } from './common/cache/cache.module';
+import { EmbeddingsModule } from './common/embeddings/embeddings.module';
 import { QueueModule } from './common/queue/queue.module';
 import { SessionModule } from './common/session/session.module';
 import { AuditModule } from './common/audit/audit.module';
@@ -56,6 +57,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     RedisModule,
     CacheModule,
     QueueModule,
+    EmbeddingsModule,
     SessionModule,
     AuditModule,
     ThrottlerModule.forRootAsync({

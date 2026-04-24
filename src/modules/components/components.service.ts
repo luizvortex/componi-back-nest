@@ -14,6 +14,7 @@ import { Tag } from '../../database/entities/tag.entity';
 import { User } from '../../database/entities/user.entity';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { CacheService } from '../../common/cache/cache.service';
+import { EmbeddingsService } from '../../common/embeddings/embeddings.service';
 import { BlocksService } from '../moderation/blocks.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ThumbnailsService } from '../thumbnails/thumbnails.service';
@@ -35,14 +36,15 @@ export class ComponentsService {
     private readonly config: ConfigService,
     private readonly cache: CacheService,
     private readonly blocks: BlocksService,
+    private readonly embeddings: EmbeddingsService,
     private readonly notifications: NotificationsService,
     private readonly thumbnails: ThumbnailsService,
   ) {}
 
   async create(user: AuthUser, dto: CreateComponentDto): Promise<Component> {
-    return this.dataSource.transaction(async (trx) => {
+    const saved = await this.dataSource.transaction(async (trx) => {
       const baseSlug = this.slugify(dto.name);
-      const saved = await this.insertWithUniqueSlug(trx, user.id, baseSlug, () =>
+      const row = await this.insertWithUniqueSlug(trx, user.id, baseSlug, () =>
         trx.getRepository(Component).create({
           authorId: user.id,
           name: dto.name,
@@ -56,27 +58,34 @@ export class ComponentsService {
 
       const version = await trx.getRepository(ComponentVersion).save(
         trx.getRepository(ComponentVersion).create({
-          componentId: saved.id,
+          componentId: row.id,
           version: 1,
           code: dto.code,
           dependencies: dto.dependencies ?? {},
         }),
       );
-      saved.currentVersionId = version.id;
-      await trx.getRepository(Component).save(saved);
+      row.currentVersionId = version.id;
+      await trx.getRepository(Component).save(row);
 
       if (dto.tagSlugs?.length) {
-        await this.attachTags(trx, saved.id, dto.tagSlugs);
+        await this.attachTags(trx, row.id, dto.tagSlugs);
       }
 
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
       await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
-      return saved;
+      return row;
     });
+
+    // Post-commit: the row is visible to other sessions — enqueue an
+    // embedding job so semantic search picks it up. Fire-and-forget at
+    // the service level (the service itself swallows errors when
+    // workers are disabled; the cron is the safety net).
+    await this.embeddings.enqueue(saved.id);
+    return saved;
   }
 
   async fork(parentId: string, user: AuthUser, dto: ForkComponentDto): Promise<Component> {
-    return this.dataSource.transaction(async (trx) => {
+    const fork = await this.dataSource.transaction(async (trx) => {
       const parent = await trx
         .getRepository(Component)
         .findOne({ where: { id: parentId }, relations: { componentTags: { tag: true } } });
@@ -143,6 +152,10 @@ export class ComponentsService {
       ]);
       return fork;
     });
+
+    // Fork gets its own embedding — same input assembly as create.
+    await this.embeddings.enqueue(fork.id);
+    return fork;
   }
 
   async list(query: ListComponentsDto, user?: AuthUser): Promise<Component[]> {
@@ -253,12 +266,23 @@ export class ComponentsService {
     // double as a resource-existence oracle for other users' IDs.
     if (component.authorId !== user.id) throw new NotFoundException('Component not found');
 
+    // Track whether any field that feeds the semantic-embedding input
+    // changed. If only `isPublic`/`category` flipped the vector would
+    // still be valid — no point burning CPU re-embedding.
+    let embeddingRelevantChange = false;
     if (dto.name && dto.name !== component.name) {
       component.name = dto.name;
       component.slug = await this.findUniqueSlug(user.id, this.slugify(dto.name), component.id);
+      embeddingRelevantChange = true;
     }
-    if (dto.description !== undefined) component.description = dto.description ?? null;
-    if (dto.framework) component.framework = dto.framework;
+    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
+      component.description = dto.description ?? null;
+      embeddingRelevantChange = true;
+    }
+    if (dto.framework && dto.framework !== component.framework) {
+      component.framework = dto.framework;
+      embeddingRelevantChange = true;
+    }
     if (dto.category !== undefined) component.category = dto.category ?? null;
     if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
 
@@ -268,6 +292,9 @@ export class ComponentsService {
       `author:${user.id}`,
       'feed:trending',
     );
+    if (embeddingRelevantChange) {
+      await this.embeddings.enqueue(id);
+    }
     return saved;
   }
 

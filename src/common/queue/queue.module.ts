@@ -2,7 +2,11 @@ import { BullModule } from '@nestjs/bullmq';
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
-import { QUEUE_NOTIFICATIONS, QUEUE_THUMBNAILS } from './queue.constants';
+import {
+  QUEUE_EMBEDDINGS,
+  QUEUE_NOTIFICATIONS,
+  QUEUE_THUMBNAILS,
+} from './queue.constants';
 
 /**
  * Registers a BullMQ connection + the queues we publish to from any module.
@@ -52,6 +56,7 @@ import { QUEUE_NOTIFICATIONS, QUEUE_THUMBNAILS } from './queue.constants';
     BullModule.registerQueue(
       { name: QUEUE_NOTIFICATIONS },
       { name: QUEUE_THUMBNAILS },
+      { name: QUEUE_EMBEDDINGS },
     ),
   ],
   exports: [BullModule],

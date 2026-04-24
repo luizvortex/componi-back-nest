@@ -65,6 +65,14 @@ export const envValidationSchema = Joi.object({
   PRIVACY_VERSION: Joi.string().default('2026-04-23'),
   TERMS_VERSION: Joi.string().default('2026-04-23'),
 
+  // ── Embeddings (local ONNX via Transformers.js, zero paid deps) ──────
+  EMBEDDINGS_ENABLED: Joi.boolean().default(true),
+  EMBEDDINGS_MODEL: Joi.string().default('Xenova/multilingual-e5-small'),
+  EMBEDDINGS_DIMENSIONS: Joi.number().integer().positive().default(384),
+  EMBEDDINGS_MAX_INPUT_CHARS: Joi.number().integer().positive().default(1800),
+  EMBEDDINGS_MAX_QUERY_CHARS: Joi.number().integer().positive().default(200),
+  EMBEDDINGS_SEARCH_CACHE_TTL: Joi.number().integer().positive().default(300),
+
   // ── Admin bootstrap CLI (optional at runtime; required for the CLI) ──
   ADMIN_BOOTSTRAP_SECRET: Joi.string().min(32).optional(),
 });

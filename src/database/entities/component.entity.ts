@@ -90,6 +90,21 @@ export class Component {
   @Column({ type: 'int', default: 0 })
   sharesCount!: number;
 
+  /**
+   * Timestamp of the last semantic-embedding regeneration. The vector
+   * itself is NOT declared on the entity — `components.embedding` is a
+   * pgvector column read/written only via raw SQL from EmbeddingsService
+   * and SemanticSearchService. Keeping it off the entity prevents
+   * accidental inclusion in SELECTs (each row would carry 1.5 KB of
+   * extra payload and blow our Supabase bandwidth budget).
+   *
+   * Null = embedding missing (new row, backfill pending, or failed
+   * generation). Rows where `embeddingGeneratedAt < updatedAt` are
+   * stale and picked up by the backfill cron.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  embeddingGeneratedAt!: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

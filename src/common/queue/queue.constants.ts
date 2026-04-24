@@ -3,3 +3,4 @@
  */
 export const QUEUE_NOTIFICATIONS = 'notifications';
 export const QUEUE_THUMBNAILS = 'thumbnails';
+export const QUEUE_EMBEDDINGS = 'embeddings';
