@@ -91,7 +91,7 @@ export class SupabaseAuthGuard implements CanActivate {
     if (!session) {
       // Auth row not yet provisioned (first request after signup). Proceed
       // as a default 'user' — AuthService will mirror the row shortly.
-      req.user = this.toAuthUser(claims, 'user', null);
+      req.user = this.toAuthUser(claims, 'user', null, null, null);
       return true;
     }
 
@@ -102,7 +102,13 @@ export class SupabaseAuthGuard implements CanActivate {
       });
     }
 
-    req.user = this.toAuthUser(claims, session.role, session.suspendedUntil);
+    req.user = this.toAuthUser(
+      claims,
+      session.role,
+      session.suspendedUntil,
+      session.privacyAcceptedVersion,
+      session.termsAcceptedVersion,
+    );
     return true;
   }
 
@@ -118,6 +124,8 @@ export class SupabaseAuthGuard implements CanActivate {
     claims: SupabaseClaims,
     role: AuthUser['role'],
     suspendedUntil: Date | null,
+    privacyAcceptedVersion: string | null,
+    termsAcceptedVersion: string | null,
   ): AuthUser {
     return {
       id: claims.sub as string,
@@ -127,6 +135,8 @@ export class SupabaseAuthGuard implements CanActivate {
       provider: claims.app_metadata?.provider ?? null,
       role,
       suspendedUntil,
+      privacyAcceptedVersion,
+      termsAcceptedVersion,
       claims,
     };
   }

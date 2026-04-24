@@ -7,6 +7,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { configurations } from './config';
 import { envValidationSchema } from './config/env.validation';
 import { typeOrmConfigFactory } from './database/data-source';
+import { ConsentGuard } from './common/guards/consent.guard';
 import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
 import { RedisModule } from './common/redis/redis.module';
 import { CacheModule } from './common/cache/cache.module';
@@ -30,6 +31,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { ModerationModule } from './modules/moderation/moderation.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { HealthModule } from './modules/health/health.module';
+import { HousekeepingModule } from './modules/housekeeping/housekeeping.module';
 import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
 
 @Module({
@@ -94,6 +96,7 @@ import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
     ModerationModule,
     AdminModule,
     HealthModule,
+    HousekeepingModule,
     ThumbnailsModule,
   ],
   providers: [
@@ -101,9 +104,12 @@ import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
     // can inject it — throttler v6 dropped `extraProviders`.
     RedisThrottlerStorage,
     // Auth guard runs first so @OptionalAuth populates req.user for the
-    // throttler, letting it key by userId instead of IP.
+    // throttler, letting it key by userId instead of IP. ConsentGuard
+    // runs AFTER the throttler so rate-limit rejections don't leak the
+    // consent-required response shape to unauthenticated scrapers.
     { provide: APP_GUARD, useClass: SupabaseAuthGuard },
     { provide: APP_GUARD, useClass: UserAwareThrottlerGuard },
+    { provide: APP_GUARD, useClass: ConsentGuard },
   ],
 })
 export class AppModule {}

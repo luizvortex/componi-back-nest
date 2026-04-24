@@ -18,5 +18,8 @@ export interface AuthUser {
   role: UserRole;
   /** Non-null + future means the user is banned; guard rejects the request. */
   suspendedUntil: Date | null;
+  /** Latest privacy/terms version accepted — null if never accepted. ConsentGuard compares against the server-side current versions. */
+  privacyAcceptedVersion: string | null;
+  termsAcceptedVersion: string | null;
   claims: Record<string, unknown>;
 }

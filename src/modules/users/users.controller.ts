@@ -16,6 +16,7 @@ import type { Request } from 'express';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
+import { SkipConsentCheck } from '../../common/decorators/skip-consent-check.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { AccountPrivacyService } from './account-privacy.service';
@@ -45,14 +46,16 @@ export class UsersController {
     return this.service.update(user.id, dto);
   }
 
-  /** LGPD Art. 18 V — data portability. */
+  /** LGPD Art. 18 V — data portability. Must stay reachable regardless of consent. */
+  @SkipConsentCheck()
   @Get('me/export')
   @Header('Content-Disposition', 'attachment; filename="componi-export.json"')
   exportMe(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.privacy.exportData(AuditService.contextFromRequest(user, req));
   }
 
-  /** LGPD Art. 18 VI — erasure. Irreversible anonymization. */
+  /** LGPD Art. 18 VI — erasure. Must stay reachable regardless of consent. */
+  @SkipConsentCheck()
   @Delete('me')
   @HttpCode(HttpStatus.NO_CONTENT)
   deleteMe(@CurrentUser() user: AuthUser, @Req() req: Request) {
@@ -60,12 +63,14 @@ export class UsersController {
   }
 
   /** LGPD Art. 8º — current consent status; used by the frontend prompt. */
+  @SkipConsentCheck()
   @Get('me/consent')
   getConsent(@CurrentUser() user: AuthUser) {
     return this.consent.getStatus(user.id);
   }
 
   /** Records acceptance of the server-side current privacy/terms versions. */
+  @SkipConsentCheck()
   @Post('me/consent')
   acceptConsent(@CurrentUser() user: AuthUser, @Body() dto: AcceptConsentDto) {
     return this.consent.accept(user.id, dto);

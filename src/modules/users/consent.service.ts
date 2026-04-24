@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { SessionService } from '../../common/session/session.service';
 import { User } from '../../database/entities/user.entity';
 
 export interface ConsentStatus {
@@ -37,6 +38,7 @@ export class ConsentService {
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly config: ConfigService,
+    private readonly sessions: SessionService,
   ) {}
 
   async getStatus(userId: string): Promise<ConsentStatus> {
@@ -98,6 +100,9 @@ export class ConsentService {
         .where('id = :id', { id: userId })
         .execute();
       if (!result.affected) throw new NotFoundException('User not found');
+      // Drop the cached session so ConsentGuard sees the fresh versions
+      // on the next request instead of up to 30s later.
+      await this.sessions.invalidate(userId);
     }
 
     return this.getStatus(userId);

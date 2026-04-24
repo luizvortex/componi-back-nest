@@ -9,6 +9,8 @@ import { CacheService } from '../cache/cache.service';
 export interface SessionState {
   role: UserRole;
   suspendedUntil: Date | null;
+  privacyAcceptedVersion: string | null;
+  termsAcceptedVersion: string | null;
 }
 
 /**
@@ -37,12 +39,21 @@ export class SessionService {
         suspendedUntil: cached.suspendedUntil
           ? new Date(cached.suspendedUntil as unknown as string)
           : null,
+        privacyAcceptedVersion: cached.privacyAcceptedVersion,
+        termsAcceptedVersion: cached.termsAcceptedVersion,
       };
     }
 
     const row = await this.users
       .createQueryBuilder('u')
-      .select(['u.id', 'u.role', 'u.suspendedUntil', 'u.deletedAt'])
+      .select([
+        'u.id',
+        'u.role',
+        'u.suspendedUntil',
+        'u.privacyAcceptedVersion',
+        'u.termsAcceptedVersion',
+        'u.deletedAt',
+      ])
       .where('u.id = :id', { id: userId })
       .getOne();
 
@@ -51,6 +62,8 @@ export class SessionService {
     const state: SessionState = {
       role: row.role,
       suspendedUntil: row.suspendedUntil,
+      privacyAcceptedVersion: row.privacyAcceptedVersion,
+      termsAcceptedVersion: row.termsAcceptedVersion,
     };
     await this.cache.set(this.key(userId), state, 30, [`user:${userId}:session`]);
     return state;
