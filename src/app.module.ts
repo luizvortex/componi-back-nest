@@ -33,7 +33,9 @@ import { ModerationModule } from './modules/moderation/moderation.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { HealthModule } from './modules/health/health.module';
 import { HousekeepingModule } from './modules/housekeeping/housekeeping.module';
+import { MiscModule } from './modules/misc/misc.module';
 import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
 
 @Module({
   imports: [
@@ -99,7 +101,9 @@ import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
     AdminModule,
     HealthModule,
     HousekeepingModule,
+    MiscModule,
     ThumbnailsModule,
+    UploadsModule,
   ],
   providers: [
     // Expose the Redis-backed storage so ThrottlerModule's async factory

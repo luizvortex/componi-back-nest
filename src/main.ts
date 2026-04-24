@@ -1,6 +1,10 @@
 import 'reflect-metadata';
 import { NestFactory, Reflector } from '@nestjs/core';
-import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+import {
+  ClassSerializerInterceptor,
+  RequestMethod,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
@@ -22,7 +26,15 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   const apiPrefix = config.get<string>('app.apiPrefix', 'api/v1');
-  app.setGlobalPrefix(apiPrefix);
+  // Well-known canonical paths (robots.txt, RFC 9116 security.txt) must
+  // resolve at the apex, not under /api/v1/ — crawlers and researchers
+  // won't look anywhere else.
+  app.setGlobalPrefix(apiPrefix, {
+    exclude: [
+      { path: 'robots.txt', method: RequestMethod.GET },
+      { path: '.well-known/security.txt', method: RequestMethod.GET },
+    ],
+  });
 
   app.use(helmet());
   app.use(compression());
