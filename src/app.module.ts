@@ -5,6 +5,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
 import { configurations } from './config';
+import { envValidationSchema } from './config/env.validation';
 import { typeOrmConfigFactory } from './database/data-source';
 import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
 import { RedisModule } from './common/redis/redis.module';
@@ -28,6 +29,7 @@ import { SearchModule } from './modules/search/search.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ModerationModule } from './modules/moderation/moderation.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -35,6 +37,10 @@ import { AdminModule } from './modules/admin/admin.module';
       isGlobal: true,
       load: configurations,
       envFilePath: ['.env.local', '.env'],
+      // Boot-time env validation. Missing/typo'd vars fail the process
+      // with a readable error instead of surfacing as runtime undefineds.
+      validationSchema: envValidationSchema,
+      validationOptions: { allowUnknown: true, abortEarly: false },
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
@@ -86,6 +92,7 @@ import { AdminModule } from './modules/admin/admin.module';
     NotificationsModule,
     ModerationModule,
     AdminModule,
+    HealthModule,
   ],
   providers: [
     // Expose the Redis-backed storage so ThrottlerModule's async factory

@@ -3,6 +3,7 @@ import { NestFactory, Reflector } from '@nestjs/core';
 import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import compression from 'compression';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -11,10 +12,16 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const config = app.get(ConfigService);
 
+  // Forwards SIGTERM/SIGINT to @nestjs OnApplicationShutdown hooks
+  // (RedisModule.quit, BullMQ workers, TypeORM pool) so a deploy rolling
+  // containers doesn't abort in-flight jobs.
+  app.enableShutdownHooks();
+
   const apiPrefix = config.get<string>('app.apiPrefix', 'api/v1');
   app.setGlobalPrefix(apiPrefix);
 
   app.use(helmet());
+  app.use(compression());
   app.enableCors({
     origin: config.get<string[]>('app.corsOrigins'),
     credentials: true,
