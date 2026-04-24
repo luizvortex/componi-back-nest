@@ -30,6 +30,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { ModerationModule } from './modules/moderation/moderation.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { HealthModule } from './modules/health/health.module';
+import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { HealthModule } from './modules/health/health.module';
     ModerationModule,
     AdminModule,
     HealthModule,
+    ThumbnailsModule,
   ],
   providers: [
     // Expose the Redis-backed storage so ThrottlerModule's async factory

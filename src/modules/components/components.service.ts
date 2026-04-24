@@ -16,6 +16,7 @@ import type { AuthUser } from '../../common/types/auth-user.type';
 import { CacheService } from '../../common/cache/cache.service';
 import { BlocksService } from '../moderation/blocks.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ThumbnailsService } from '../thumbnails/thumbnails.service';
 import { CreateComponentDto } from './dto/create-component.dto';
 import { ForkComponentDto } from './dto/fork-component.dto';
 import { ListComponentsDto } from './dto/list-components.dto';
@@ -35,6 +36,7 @@ export class ComponentsService {
     private readonly cache: CacheService,
     private readonly blocks: BlocksService,
     private readonly notifications: NotificationsService,
+    private readonly thumbnails: ThumbnailsService,
   ) {}
 
   async create(user: AuthUser, dto: CreateComponentDto): Promise<Component> {
@@ -292,6 +294,10 @@ export class ComponentsService {
     component.thumbnailUrl = thumbnailUrl;
     const saved = await this.components.save(component);
     await this.cache.invalidateTags(`component:${id}`, 'feed:trending');
+    // Fire-and-forget reachability check. Failure doesn't block the
+    // save — a broken URL is logged by the worker and surfaced via
+    // observability, not via the user-facing 200/5xx response.
+    await this.thumbnails.enqueue({ componentId: id, thumbnailUrl });
     return saved;
   }
 

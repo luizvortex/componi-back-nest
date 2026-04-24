@@ -17,5 +17,17 @@ export default registerAs('redis', () => ({
     concurrency: parseInt(process.env.QUEUE_CONCURRENCY ?? '8', 10),
     removeOnCompleteCount: parseInt(process.env.QUEUE_KEEP_COMPLETED ?? '500', 10),
     removeOnFailCount: parseInt(process.env.QUEUE_KEEP_FAILED ?? '5000', 10),
+    /**
+     * When false, worker processors are NOT registered with the Nest DI
+     * container, so BullMQ never polls Redis for jobs. Enqueues still
+     * write to the queue; a separate process with this flag on consumes
+     * them. Services that care (e.g. notifications) fall back to inline
+     * synchronous execution when the flag is off — see
+     * NotificationsService.enqueue.
+     *
+     * Use case: free-tier Redis (Upstash's 10k cmd/day) evaporates fast
+     * against a polling worker. Keep API nodes publish-only.
+     */
+    workersEnabled: process.env.QUEUE_WORKERS_ENABLED !== 'false',
   },
 }));

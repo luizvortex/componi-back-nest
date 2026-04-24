@@ -8,6 +8,7 @@ import { Tag } from '../../database/entities/tag.entity';
 import { User } from '../../database/entities/user.entity';
 import { ModerationModule } from '../moderation/moderation.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ThumbnailsModule } from '../thumbnails/thumbnails.module';
 import { ComponentsService } from './components.service';
 import { ComponentsController } from './components.controller';
 
@@ -16,6 +17,7 @@ import { ComponentsController } from './components.controller';
     TypeOrmModule.forFeature([Component, ComponentVersion, ComponentTag, Tag, User]),
     ModerationModule,
     NotificationsModule,
+    ThumbnailsModule,
   ],
   controllers: [ComponentsController],
   providers: [ComponentsService],
