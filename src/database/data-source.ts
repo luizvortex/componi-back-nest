@@ -45,16 +45,18 @@ export const entities = [
   AuditLog,
 ];
 
-export const typeOrmConfigFactory = (config: ConfigService): TypeOrmModuleOptions => ({
-  type: 'postgres',
-  url: config.get<string>('database.url'),
-  ssl: config.get<boolean>('database.ssl') ? { rejectUnauthorized: false } : false,
-  logging: config.get<boolean>('database.logging'),
-  synchronize: config.get<boolean>('database.synchronize'),
-  entities,
-  migrations: [__dirname + '/migrations/*.{ts,js}'],
-  migrationsRun: false,
-});
+export const typeOrmConfigFactory = (config: ConfigService): TypeOrmModuleOptions => {
+  return {
+    type: 'postgres',
+    url: config.get<string>('database.url'),
+    ssl: config.get<boolean>('database.ssl') ? { rejectUnauthorized: false } : false,
+    logging: config.get<boolean>('database.logging'),
+    synchronize: config.get<boolean>('database.synchronize'),
+    entities,
+    migrations: [__dirname + '/migrations/*.{ts,js}'],
+    migrationsRun: false,
+  };
+};
 
 const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',

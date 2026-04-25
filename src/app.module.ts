@@ -19,6 +19,7 @@ import { QueueModule } from './common/queue/queue.module';
 import { SessionModule } from './common/session/session.module';
 import { AuditModule } from './common/audit/audit.module';
 import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
+import { ThrottlerStorageModule } from './common/throttler/throttler-storage.module';
 import { UserAwareThrottlerGuard } from './common/throttler/user-aware-throttler.guard';
 
 import { AuthModule } from './modules/auth/auth.module';
@@ -64,6 +65,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     RealtimeModule,
     SessionModule,
     AuditModule,
+    ThrottlerStorageModule,
     ThrottlerModule.forRootAsync({
       inject: [ConfigService, RedisThrottlerStorage],
       useFactory: (config: ConfigService, storage: RedisThrottlerStorage) => ({
@@ -112,9 +114,6 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     UploadsModule,
   ],
   providers: [
-    // Expose the Redis-backed storage so ThrottlerModule's async factory
-    // can inject it — throttler v6 dropped `extraProviders`.
-    RedisThrottlerStorage,
     // Auth guard runs first so @OptionalAuth populates req.user for the
     // throttler, letting it key by userId instead of IP. ConsentGuard
     // runs AFTER the throttler so rate-limit rejections don't leak the
