@@ -73,6 +73,12 @@ export const envValidationSchema = Joi.object({
   EMBEDDINGS_MAX_QUERY_CHARS: Joi.number().integer().positive().default(200),
   EMBEDDINGS_SEARCH_CACHE_TTL: Joi.number().integer().positive().default(300),
 
+  // ── Realtime (Socket.IO) ─────────────────────────────────────────────
+  REALTIME_ENABLED: Joi.boolean().default(true),
+  REALTIME_ADAPTER: Joi.string().valid('memory', 'redis').default('memory'),
+  REALTIME_NAMESPACE: Joi.string().default('/realtime'),
+  REALTIME_MAX_COMPONENT_SUBSCRIPTIONS: Joi.number().integer().positive().default(20),
+
   // ── Admin bootstrap CLI (optional at runtime; required for the CLI) ──
   ADMIN_BOOTSTRAP_SECRET: Joi.string().min(32).optional(),
 });

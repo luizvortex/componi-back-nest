@@ -7,9 +7,11 @@ import { APP_GUARD } from '@nestjs/core';
 import { configurations } from './config';
 import { envValidationSchema } from './config/env.validation';
 import { typeOrmConfigFactory } from './database/data-source';
+import { AuthCommonModule } from './common/auth/auth.module';
 import { ConsentGuard } from './common/guards/consent.guard';
 import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
 import { LoggerModule } from './common/logger/logger.module';
+import { RealtimeModule } from './common/realtime/realtime.module';
 import { RedisModule } from './common/redis/redis.module';
 import { CacheModule } from './common/cache/cache.module';
 import { EmbeddingsModule } from './common/embeddings/embeddings.module';
@@ -56,8 +58,10 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     }),
     RedisModule,
     CacheModule,
+    AuthCommonModule,
     QueueModule,
     EmbeddingsModule,
+    RealtimeModule,
     SessionModule,
     AuditModule,
     ThrottlerModule.forRootAsync({

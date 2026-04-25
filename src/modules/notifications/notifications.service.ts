@@ -10,6 +10,7 @@ import {
   NotificationType,
 } from '../../database/entities/notification.entity';
 import { QUEUE_NOTIFICATIONS } from '../../common/queue/queue.constants';
+import { RealtimeService } from '../../common/realtime/realtime.service';
 
 export interface NotificationJob {
   userId: string;
@@ -33,6 +34,7 @@ export class NotificationsService {
   constructor(
     @InjectRepository(Notification) private readonly notifications: Repository<Notification>,
     @InjectQueue(QUEUE_NOTIFICATIONS) private readonly queue: Queue<NotificationJob>,
+    private readonly realtime: RealtimeService,
     config: ConfigService,
   ) {
     this.workersEnabled = config.get<boolean>('redis.queue.workersEnabled', true);
@@ -113,13 +115,22 @@ export class NotificationsService {
       if (recent) return;
     }
 
+    const finalPayload = {
+      ...(payload ?? {}),
+      ...(dedupeKey ? { dedupeKey } : {}),
+    };
     await this.notifications.save(
       this.notifications.create({
         userId,
         type,
         actorId: actorId ?? null,
-        payload: { ...(payload ?? {}), ...(dedupeKey ? { dedupeKey } : {}) },
+        payload: finalPayload,
       }),
     );
+
+    // Live nudge — best-effort. The DB write above is the source of
+    // truth; if the user's socket is offline they pick the notification
+    // up via GET /notifications on next page load.
+    this.realtime.notifyUser(userId, type, actorId ?? null, finalPayload);
   }
 }
