@@ -39,10 +39,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
         ? { statusCode: status, message: payload }
         : { statusCode: status, ...(payload as Record<string, unknown>) };
 
+    // Echo the request ID so support tickets can be matched to logs.
+    const requestId = (request as unknown as { id?: string }).id;
+
     response.status(status).json({
       ...body,
       path: request.url,
       timestamp: new Date().toISOString(),
+      ...(requestId ? { requestId } : {}),
     });
   }
 }

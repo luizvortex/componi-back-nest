@@ -1,37 +1,19 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import * as jwt from 'jsonwebtoken';
-import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 
+import { SupabaseClaims, SupabaseJwtVerifier } from '../auth/supabase-jwt-verifier';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { IS_OPTIONAL_AUTH_KEY } from '../decorators/optional-auth.decorator';
+import { SessionService } from '../session/session.service';
 import type { AuthUser } from '../types/auth-user.type';
-import type { SupabaseJwtStrategy } from '../../config/supabase.config';
-
-type SupabaseClaims = JWTPayload & {
-  email?: string;
-  user_metadata?: {
-    user_name?: string;
-    preferred_username?: string;
-    full_name?: string;
-    name?: string;
-    avatar_url?: string;
-    [k: string]: unknown;
-  };
-  app_metadata?: {
-    provider?: string;
-    providers?: string[];
-    [k: string]: unknown;
-  };
-};
 
 /**
  * Validates Supabase-issued JWTs.
@@ -40,15 +22,19 @@ type SupabaseClaims = JWTPayload & {
  *   • @Public()        — no auth, req.user is never populated
  *   • @OptionalAuth()  — auth attempted; valid token populates req.user, missing/invalid is ignored
  *   • (default)        — bearer token required; throws 401 if missing/invalid
+ *
+ * The actual JWT crypto is delegated to SupabaseJwtVerifier so the
+ * WebSocket gateway can reuse it without duplicating the strategy
+ * branching.
  */
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
   private readonly logger = new Logger(SupabaseAuthGuard.name);
-  private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
   constructor(
     private readonly reflector: Reflector,
-    private readonly config: ConfigService,
+    private readonly verifier: SupabaseJwtVerifier,
+    private readonly sessions: SessionService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -71,16 +57,42 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing bearer token');
     }
 
+    let claims: SupabaseClaims;
     try {
-      const claims = await this.verify(token);
+      claims = await this.verifier.verify(token);
       if (!claims.sub) throw new Error('Token missing subject');
-      req.user = this.toAuthUser(claims);
-      return true;
     } catch (err) {
       this.logger.debug(`JWT verification failed: ${(err as Error).message}`);
       if (isOptional) return true;
       throw new UnauthorizedException('Invalid or expired token');
     }
+
+    // Hydrate role + suspension from the local users row (cached 30s).
+    // A valid JWT for a suspended user must still be rejected — the ban
+    // check cannot live in JWT claims because tokens last up to 1h.
+    const session = await this.sessions.hydrate(claims.sub as string);
+    if (!session) {
+      // Auth row not yet provisioned (first request after signup). Proceed
+      // as a default 'user' — AuthService will mirror the row shortly.
+      req.user = this.toAuthUser(claims, 'user', null, null, null);
+      return true;
+    }
+
+    if (session.suspendedUntil && session.suspendedUntil.getTime() > Date.now()) {
+      throw new ForbiddenException({
+        message: 'Account suspended',
+        suspendedUntil: session.suspendedUntil.toISOString(),
+      });
+    }
+
+    req.user = this.toAuthUser(
+      claims,
+      session.role,
+      session.suspendedUntil,
+      session.privacyAcceptedVersion,
+      session.termsAcceptedVersion,
+    );
+    return true;
   }
 
   private extractBearer(req: Request): string | null {
@@ -91,38 +103,24 @@ export class SupabaseAuthGuard implements CanActivate {
     return token.trim();
   }
 
-  private toAuthUser(claims: SupabaseClaims): AuthUser {
+  private toAuthUser(
+    claims: SupabaseClaims,
+    role: AuthUser['role'],
+    suspendedUntil: Date | null,
+    privacyAcceptedVersion: string | null,
+    termsAcceptedVersion: string | null,
+  ): AuthUser {
     return {
       id: claims.sub as string,
       email: claims.email ?? null,
       githubUsername:
         claims.user_metadata?.user_name ?? claims.user_metadata?.preferred_username ?? null,
       provider: claims.app_metadata?.provider ?? null,
+      role,
+      suspendedUntil,
+      privacyAcceptedVersion,
+      termsAcceptedVersion,
       claims,
     };
-  }
-
-  private async verify(token: string): Promise<SupabaseClaims> {
-    const strategy = this.config.get<SupabaseJwtStrategy>('supabase.jwt.strategy', 'hs256');
-    const audience = this.config.get<string>('supabase.jwt.audience');
-    const issuer = this.config.get<string | undefined>('supabase.jwt.issuer');
-
-    if (strategy === 'jwks') {
-      const jwksUri = this.config.get<string>('supabase.jwt.jwksUri');
-      if (!jwksUri) throw new Error('SUPABASE_JWKS_URI not configured');
-      if (!this.jwks) this.jwks = createRemoteJWKSet(new URL(jwksUri));
-      const { payload } = await jwtVerify(token, this.jwks, { audience, issuer });
-      return payload as SupabaseClaims;
-    }
-
-    const secret = this.config.get<string>('supabase.jwt.secret');
-    if (!secret) throw new Error('SUPABASE_JWT_SECRET not configured');
-    const decoded = jwt.verify(token, secret, {
-      algorithms: ['HS256'],
-      audience,
-      issuer: issuer || undefined,
-    });
-    if (typeof decoded === 'string') throw new Error('Unexpected token shape');
-    return decoded as SupabaseClaims;
   }
 }

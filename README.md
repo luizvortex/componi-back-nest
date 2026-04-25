@@ -10,6 +10,10 @@ This repo is the API layer. It does **zero** server-side compilation of user cod
 - [TypeORM](https://typeorm.io/) + PostgreSQL (via [Supabase](https://supabase.com/))
 - [Supabase Auth](https://supabase.com/auth) with GitHub OAuth — JWTs validated inside Nest via a custom guard (no Passport local)
 - [Supabase Storage](https://supabase.com/storage) — component thumbnails
+- **Redis** — shared by three subsystems:
+  - Distributed rate limit (tiered: 10s / 1m / 1h windows, keyed by `userId` when authenticated, IP otherwise)
+  - Read-through cache for feed, trending, and component detail (tag-based invalidation)
+  - [BullMQ](https://docs.bullmq.io/) queues for notification fan-out and (future) thumbnail generation
 - Swagger (`/api/v1/docs`), Helmet, global validation, throttling
 
 ## Quick start
@@ -23,14 +27,18 @@ npm install
 #    - Create a public bucket `component-thumbnails` under Storage
 #    - Copy the project URL, anon key, service role key, and JWT secret
 
-# 3. Configure env
-cp .env.example .env
-#   then fill in DATABASE_URL, SUPABASE_* keys
+# 3. Start Redis locally (needed for rate limit + cache + queues)
+docker compose up -d redis
+#   or: brew services start redis
 
-# 4. Run migrations (after you generate the first one — see below)
+# 4. Configure env
+cp .env.example .env
+#   then fill in DATABASE_URL, SUPABASE_* keys (REDIS_URL defaults to localhost)
+
+# 5. Run migrations (after you generate the first one — see below)
 npm run migration:run
 
-# 5. Start dev server
+# 6. Start dev server
 npm run start:dev
 #   → http://localhost:3000/api/v1
 #   → Swagger UI at http://localhost:3000/api/v1/docs
@@ -43,8 +51,12 @@ src/
 ├── config/                 # typed config namespaces (app, database, supabase)
 ├── common/
 │   ├── guards/             # SupabaseAuthGuard (global via APP_GUARD)
-│   ├── decorators/         # @CurrentUser, @Public
+│   ├── decorators/         # @CurrentUser, @Public, @OptionalAuth
 │   ├── filters/            # HttpExceptionFilter
+│   ├── redis/              # shared ioredis client (global module)
+│   ├── cache/              # CacheService (get/set/wrap/invalidateTags)
+│   ├── queue/              # BullMQ wiring + queue name constants
+│   ├── throttler/          # Redis-backed storage + user-aware guard
 │   ├── dto/                # shared DTOs (pagination)
 │   └── types/              # AuthUser
 ├── database/
@@ -82,6 +94,125 @@ src/
 Two JWT verification strategies are supported (`SUPABASE_JWT_STRATEGY`):
 - `hs256` (default, simplest) — shared `SUPABASE_JWT_SECRET`
 - `jwks` (safer) — RS256 keys fetched from `SUPABASE_JWKS_URI`
+
+## Redis
+
+One Redis instance backs three subsystems. The `RedisModule` in `src/common/redis` is registered globally and exposes a single `ioredis` client via the `REDIS_CLIENT` injection token.
+
+### 1. Distributed rate limiting
+
+`UserAwareThrottlerGuard` keys by `u:<userId>` when the request carries a valid JWT and by `ip:<address>` otherwise. Without this, multiple logged-in users behind a CGNAT cannibalize each other's quota and banned users rotate IPs to bypass limits.
+
+Three tiers run in parallel — the strictest trips first:
+
+| Name   | Window | Default limit | Blocks for  |
+| ------ | ------ | ------------- | ----------- |
+| short  | 10s    | 20 requests   | 10s         |
+| medium | 60s    | 100 requests  | 60s         |
+| long   | 1h     | 2000 requests | 5 min       |
+
+Storage is `RedisThrottlerStorage` — a sliding-window implementation that fails open if Redis is unreachable (outage degrades throughput rather than 429-storming users).
+
+### 2. Read-through cache
+
+`CacheService` wraps ioredis with three ergonomics:
+
+- `get` / `set` / `del` — primitive ops (JSON-serialized)
+- `wrap(key, loader, { ttl, tags })` — miss-load-store in one call
+- `invalidateTags(...tags)` — O(1) purge of every key that was stored with a tag
+
+Currently cached:
+
+| Entry                        | Key                                  | TTL |
+| ---------------------------- | ------------------------------------ | --- |
+| Public component detail      | `component:<id>:public`              | 120s |
+| `GET /feed/trending`         | `feed:trending:<limit>`              | 30s  |
+| `GET /feed/following`        | `feed:following:<userId>:<limit>`    | 30s  |
+
+Writes to `components` (create / update / remove / fork / setThumbnail) invalidate `component:<id>`, `author:<authorId>`, and `feed:trending` tags.
+
+### 3. BullMQ queues
+
+The `notifications` queue fans out in-app notifications so the HTTP request returns before a row is persisted. `NotificationsProcessor` (registered as a `WorkerHost` in `NotificationsModule`) consumes jobs with:
+
+- per-event dedupe via `dedupeKey` (prevents spam from rapid unlike/relike)
+- self-notification filtering (no "you liked your own component")
+- exponential-backoff retries (5 attempts, 2s → ~32s)
+
+Triggers today: `like`, `favorite`, `follow`, `fork`. Future: `thumbnails` queue for screenshot generation, `emails` queue for digest sends.
+
+### Running Redis locally
+
+```bash
+docker compose up -d redis
+# or: brew services start redis
+```
+
+For production, use managed Redis (Upstash, Redis Cloud, AWS ElastiCache). Set `REDIS_URL` to the connection string and `REDIS_TLS=true` if the provider requires TLS.
+
+## Moderation + admin
+
+The authorization model is role-based with three levels, defined in `users.role`:
+
+| Role        | Default for    | Grants                                                                   |
+| ----------- | -------------- | ------------------------------------------------------------------------ |
+| `user`      | every signup   | Publish / fork / like / follow. Cannot see moderation UI.                |
+| `moderator` | elevated staff | All of `user` + resolve reports, remove content, suspend up to 30 days.  |
+| `admin`     | founders/SRE   | All of `moderator` + permanent bans, role promotion, hard-delete users.  |
+
+Roles are enforced at three layers:
+
+1. **`@Roles('admin')` decorator + `RolesGuard`** — Nest route-level check.
+2. **`users.role` CHECK constraint** — the DB rejects any value outside the enum.
+3. **Postgres trigger `users_protect_privileged_columns`** — any UPDATE that touches `role`, `suspendedUntil`, or `suspensionReason` fails with `42501` unless the transaction sets `app.privileged_update = 'true'`. This catches stray `UPDATE users SET role = 'admin'` statements (including from a compromised service_role key).
+
+`SupabaseAuthGuard` hydrates `role` and `suspendedUntil` from the local `users` row on every request (Redis-cached 30s) — so a just-suspended user stops being able to act within 30 seconds, not when their JWT expires.
+
+### Bootstrapping the first admin
+
+After running migrations and creating your user via the frontend OAuth flow:
+
+```bash
+# 1. Generate a ≥ 32 char secret and store in your secrets manager.
+export ADMIN_BOOTSTRAP_SECRET='<secret>'
+
+# 2. Find your user id:
+#    SELECT id, username FROM users WHERE email = 'you@example.com';
+
+# 3. Run the promote script. --confirm must match the env var.
+npm run admin:promote -- \
+  --user-id <uuid> \
+  --role admin \
+  --reason "Founder bootstrap" \
+  --confirm "$ADMIN_BOOTSTRAP_SECRET"
+```
+
+The script opens a transaction, sets `app.privileged_update = 'true'`, performs the role change, and writes an `audit_logs` row attributed to the promoted user (metadata `via: 'cli'`). All subsequent promotions go through the admin API which attributes them to the acting admin.
+
+### Audit trail
+
+Every privileged mutation (suspend, ban, promote, delete content, erase user) is captured in `audit_logs` with:
+- `actorId` — the staff member who acted
+- `action` — machine-readable verb
+- `targetType` / `targetId` — what they acted on
+- `metadata` — structured context (never raw PII)
+- `reason` — required for destructive actions; < 10 chars is rejected by the CLI
+- `ipAddress` + `userAgent` — from the originating HTTP request
+
+The table is append-only: the Postgres trigger `audit_logs_append_only` raises `42501` on any UPDATE or DELETE, for **every** role including the superuser used by the backend. This satisfies LGPD Art. 37 ("registro das operações de tratamento"). Retention-driven cleanup is a DBA operation, not a code path.
+
+## Compliance (LGPD / GDPR)
+
+| Right                       | How Componi satisfies it                                   |
+| --------------------------- | ---------------------------------------------------------- |
+| Access (LGPD Art. 18 II)    | `GET /users/me/export` returns all of the user's data *(next etapa)* |
+| Rectification (Art. 18 III) | Profile edit endpoints (`PATCH /users/me`).                |
+| Erasure (Art. 18 VI)        | `DELETE /users/me` hard-deletes + enqueues purge of orphans *(next etapa)* |
+| Portability (Art. 18 V)     | Export endpoint emits JSON suitable for re-import elsewhere. |
+| Record of processing (Art. 37) | `audit_logs` + `users_protect_privileged_columns` trigger. |
+| Consent versioning          | ToS + Privacy Policy version on signup *(future)*.          |
+
+Defaults align with **GDPR** too — the field names are framework-agnostic, and the audit trail satisfies Art. 30 (records of processing activities).
 
 ### Enabling Google OAuth
 
@@ -138,8 +269,6 @@ Never set `DATABASE_SYNCHRONIZE=true` in production — TypeORM's auto-sync will
 
 - v1: React/Next.js components, social features above.
 - v2: Vue/Svelte/Solid support (already modeled via `framework` column), embeddable public preview URLs, full-text search via Postgres `tsvector`.
-
-## License
 
 ## License
 

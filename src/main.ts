@@ -1,20 +1,50 @@
 import 'reflect-metadata';
 import { NestFactory, Reflector } from '@nestjs/core';
-import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+import {
+  ClassSerializerInterceptor,
+  RequestMethod,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import compression from 'compression';
+import { json, urlencoded } from 'express';
 import helmet from 'helmet';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // Replace the default Nest logger with Pino so bootstrap + request
+  // logs share structure and request-id correlation.
+  app.useLogger(app.get(Logger));
   const config = app.get(ConfigService);
 
+  // Forwards SIGTERM/SIGINT to @nestjs OnApplicationShutdown hooks
+  // (RedisModule.quit, BullMQ workers, TypeORM pool) so a deploy rolling
+  // containers doesn't abort in-flight jobs.
+  app.enableShutdownHooks();
+
   const apiPrefix = config.get<string>('app.apiPrefix', 'api/v1');
-  app.setGlobalPrefix(apiPrefix);
+  // Well-known canonical paths (robots.txt, RFC 9116 security.txt) must
+  // resolve at the apex, not under /api/v1/ — crawlers and researchers
+  // won't look anywhere else.
+  app.setGlobalPrefix(apiPrefix, {
+    exclude: [
+      { path: 'robots.txt', method: RequestMethod.GET },
+      { path: '.well-known/security.txt', method: RequestMethod.GET },
+    ],
+  });
 
   app.use(helmet());
+  app.use(compression());
+  // Explicit body-size cap. 256 KB covers the largest legitimate payload
+  // (a component create with ~50-200 KB of source code) with headroom,
+  // and rejects anything larger as a clear DoS guard. Image uploads go
+  // direct-to-Supabase via signed URLs, never through this server.
+  app.use(json({ limit: '256kb' }));
+  app.use(urlencoded({ limit: '32kb', extended: true }));
   app.enableCors({
     origin: config.get<string[]>('app.corsOrigins'),
     credentials: true,

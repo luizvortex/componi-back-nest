@@ -1,12 +1,25 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
 import { configurations } from './config';
+import { envValidationSchema } from './config/env.validation';
 import { typeOrmConfigFactory } from './database/data-source';
+import { AuthCommonModule } from './common/auth/auth.module';
+import { ConsentGuard } from './common/guards/consent.guard';
 import { SupabaseAuthGuard } from './common/guards/supabase-auth.guard';
+import { LoggerModule } from './common/logger/logger.module';
+import { RealtimeModule } from './common/realtime/realtime.module';
+import { RedisModule } from './common/redis/redis.module';
+import { CacheModule } from './common/cache/cache.module';
+import { EmbeddingsModule } from './common/embeddings/embeddings.module';
+import { QueueModule } from './common/queue/queue.module';
+import { SessionModule } from './common/session/session.module';
+import { AuditModule } from './common/audit/audit.module';
+import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
+import { UserAwareThrottlerGuard } from './common/throttler/user-aware-throttler.guard';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -19,6 +32,13 @@ import { CollectionsModule } from './modules/collections/collections.module';
 import { FeedModule } from './modules/feed/feed.module';
 import { SearchModule } from './modules/search/search.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ModerationModule } from './modules/moderation/moderation.module';
+import { AdminModule } from './modules/admin/admin.module';
+import { HealthModule } from './modules/health/health.module';
+import { HousekeepingModule } from './modules/housekeeping/housekeeping.module';
+import { MiscModule } from './modules/misc/misc.module';
+import { ThumbnailsModule } from './modules/thumbnails/thumbnails.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
 
 @Module({
   imports: [
@@ -26,19 +46,51 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
       isGlobal: true,
       load: configurations,
       envFilePath: ['.env.local', '.env'],
+      // Boot-time env validation. Missing/typo'd vars fail the process
+      // with a readable error instead of surfacing as runtime undefineds.
+      validationSchema: envValidationSchema,
+      validationOptions: { allowUnknown: true, abortEarly: false },
     }),
+    LoggerModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: typeOrmConfigFactory,
     }),
+    RedisModule,
+    CacheModule,
+    AuthCommonModule,
+    QueueModule,
+    EmbeddingsModule,
+    RealtimeModule,
+    SessionModule,
+    AuditModule,
     ThrottlerModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => [
-        {
-          ttl: config.get<number>('app.throttle.ttl', 60) * 1000,
-          limit: config.get<number>('app.throttle.limit', 100),
-        },
-      ],
+      inject: [ConfigService, RedisThrottlerStorage],
+      useFactory: (config: ConfigService, storage: RedisThrottlerStorage) => ({
+        // Tiered limits: short burst (10s), medium (1m), long (1h).
+        // A burst attack trips 'short' first; sustained scraping hits 'long'.
+        throttlers: [
+          {
+            name: 'short',
+            ttl: 10_000,
+            limit: parseInt(process.env.THROTTLE_SHORT_LIMIT ?? '20', 10),
+            blockDuration: 10_000,
+          },
+          {
+            name: 'medium',
+            ttl: (config.get<number>('app.throttle.ttl', 60) ?? 60) * 1000,
+            limit: config.get<number>('app.throttle.limit', 100),
+            blockDuration: 60_000,
+          },
+          {
+            name: 'long',
+            ttl: 3_600_000,
+            limit: parseInt(process.env.THROTTLE_LONG_LIMIT ?? '2000', 10),
+            blockDuration: 5 * 60_000,
+          },
+        ],
+        storage,
+      }),
     }),
     AuthModule,
     UsersModule,
@@ -51,10 +103,25 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     FeedModule,
     SearchModule,
     NotificationsModule,
+    ModerationModule,
+    AdminModule,
+    HealthModule,
+    HousekeepingModule,
+    MiscModule,
+    ThumbnailsModule,
+    UploadsModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Expose the Redis-backed storage so ThrottlerModule's async factory
+    // can inject it — throttler v6 dropped `extraProviders`.
+    RedisThrottlerStorage,
+    // Auth guard runs first so @OptionalAuth populates req.user for the
+    // throttler, letting it key by userId instead of IP. ConsentGuard
+    // runs AFTER the throttler so rate-limit rejections don't leak the
+    // consent-required response shape to unauthenticated scrapers.
     { provide: APP_GUARD, useClass: SupabaseAuthGuard },
+    { provide: APP_GUARD, useClass: UserAwareThrottlerGuard },
+    { provide: APP_GUARD, useClass: ConsentGuard },
   ],
 })
 export class AppModule {}

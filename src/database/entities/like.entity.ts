@@ -1,8 +1,9 @@
-import { CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+import { CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
 import { Component } from './component.entity';
 import { User } from './user.entity';
 
 @Entity({ name: 'likes' })
+@Index('IDX_likes_component', ['componentId'])
 export class Like {
   @PrimaryColumn({ type: 'uuid' })
   userId!: string;

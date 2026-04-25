@@ -20,7 +20,7 @@ export class FeedController {
 
   @OptionalAuth()
   @Get('trending')
-  trending(@Query() query: PaginationDto) {
-    return this.service.trending(query);
+  trending(@CurrentUser() user: AuthUser | undefined, @Query() query: PaginationDto) {
+    return this.service.trending(query, user?.id);
   }
 }

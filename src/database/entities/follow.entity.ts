@@ -1,7 +1,8 @@
-import { Check, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+import { Check, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
 import { User } from './user.entity';
 
 @Entity({ name: 'follows' })
+@Index('IDX_follows_followee', ['followeeId'])
 @Check('chk_follow_not_self', '"followerId" <> "followeeId"')
 export class Follow {
   @PrimaryColumn({ type: 'uuid' })

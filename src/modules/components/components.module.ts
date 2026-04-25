@@ -6,11 +6,19 @@ import { ComponentVersion } from '../../database/entities/component-version.enti
 import { ComponentTag } from '../../database/entities/component-tag.entity';
 import { Tag } from '../../database/entities/tag.entity';
 import { User } from '../../database/entities/user.entity';
+import { ModerationModule } from '../moderation/moderation.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { ThumbnailsModule } from '../thumbnails/thumbnails.module';
 import { ComponentsService } from './components.service';
 import { ComponentsController } from './components.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Component, ComponentVersion, ComponentTag, Tag, User])],
+  imports: [
+    TypeOrmModule.forFeature([Component, ComponentVersion, ComponentTag, Tag, User]),
+    ModerationModule,
+    NotificationsModule,
+    ThumbnailsModule,
+  ],
   controllers: [ComponentsController],
   providers: [ComponentsService],
   exports: [ComponentsService],

@@ -58,6 +58,46 @@ export class User {
   @Column({ type: 'int', default: 0 })
   componentsCount!: number;
 
+  /**
+   * Authorization role. Default `'user'`. Elevation to `'moderator'` or
+   * `'admin'` is NEVER done via API — only via the `admin:promote` CLI
+   * script (which requires ADMIN_BOOTSTRAP_SECRET) or direct DB access.
+   * A DB CHECK constraint enforces the allowed values, and RLS blocks
+   * UPDATEs to this column so even a compromised service_role key
+   * cannot self-escalate without going through the DBA.
+   */
+  @Column({ type: 'text', default: 'user' })
+  role!: 'user' | 'moderator' | 'admin';
+
+  /**
+   * When set and in the future, the user's JWT is rejected at the guard
+   * layer and they cannot interact. Cleared on unsuspend. Permanent bans
+   * use a far-future date (year 9999) + `suspensionReason`.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  suspendedUntil!: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  suspensionReason!: string | null;
+
+  /**
+   * Consent ledger. A null here means the user hasn't yet accepted the
+   * current policy revision — the frontend should prompt on next login.
+   * Version strings mirror the `Version:` header in docs/PRIVACY.md and
+   * docs/TERMS.md and are sourced from config.compliance.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  privacyAcceptedAt!: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  privacyAcceptedVersion!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  termsAcceptedAt!: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  termsAcceptedVersion!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

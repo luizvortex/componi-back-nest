@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel in-flight runs when a new commit lands on the same PR/branch.
+# Saves GitHub Actions minutes on the free tier.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint + type-check + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # npm ci is the only dep install path — fails fast on lockfile drift.
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint -- --max-warnings 0
+        continue-on-error: false
+
+      # tsc --noEmit is the canonical type check; nest build also compiles
+      # but the explicit step gives a cleaner error panel on failure.
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      # Tests are opt-in until etapa 13 seeds the suite — the step stays
+      # non-blocking via `|| true` guard while the test file count is
+      # still effectively zero. Remove the guard once real specs exist.
+      - name: Test
+        run: npm test -- --passWithNoTests

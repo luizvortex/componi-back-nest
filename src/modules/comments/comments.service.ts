@@ -1,5 +1,4 @@
 import {
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,6 +7,7 @@ import { DataSource, Repository } from 'typeorm';
 
 import { Comment } from '../../database/entities/comment.entity';
 import { Component } from '../../database/entities/component.entity';
+import { RealtimeService } from '../../common/realtime/realtime.service';
 import type { AuthUser } from '../../common/types/auth-user.type';
 import { CreateCommentDto } from './dto/create-comment.dto';
 
@@ -16,6 +16,7 @@ export class CommentsService {
   constructor(
     @InjectRepository(Comment) private readonly comments: Repository<Comment>,
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly realtime: RealtimeService,
   ) {}
 
   list(componentId: string): Promise<Comment[]> {
@@ -27,7 +28,7 @@ export class CommentsService {
   }
 
   async create(componentId: string, user: AuthUser, dto: CreateCommentDto): Promise<Comment> {
-    return this.dataSource.transaction(async (trx) => {
+    const result = await this.dataSource.transaction(async (trx) => {
       const component = await trx.getRepository(Component).findOne({ where: { id: componentId } });
       if (!component) throw new NotFoundException('Component not found');
 
@@ -39,14 +40,23 @@ export class CommentsService {
       });
       const saved = await trx.getRepository(Comment).save(comment);
       await trx.getRepository(Component).increment({ id: componentId }, 'commentsCount', 1);
-      return saved;
+      return { saved, commentsCount: component.commentsCount + 1 };
     });
+
+    // Live broadcast to anyone viewing the component detail page.
+    this.realtime.componentCommented(
+      componentId,
+      result.saved.id,
+      user.id,
+      result.commentsCount,
+    );
+    return result.saved;
   }
 
   async remove(id: string, user: AuthUser): Promise<void> {
     const comment = await this.comments.findOne({ where: { id } });
     if (!comment) throw new NotFoundException('Comment not found');
-    if (comment.authorId !== user.id) throw new ForbiddenException();
+    if (comment.authorId !== user.id) throw new NotFoundException('Comment not found');
     await this.dataSource.transaction(async (trx) => {
       await trx.getRepository(Comment).softRemove(comment);
       await trx
