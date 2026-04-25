@@ -53,13 +53,24 @@ export class ThumbnailsService {
 
   /**
    * Shared delivery path — invoked by the processor and by the inline
-   * fallback. HEAD the URL to confirm the upload actually landed. A 4xx
-   * throws so BullMQ retries per defaultJobOptions.
+   * fallback. HEAD the URL to confirm the upload landed AND that what
+   * landed is actually an image. The signed-upload flow lets the client
+   * choose the Content-Type at PUT time, so an attacker could ask for
+   * an image/* signed URL and then upload an HTML payload with
+   * Content-Type: text/html — when the public URL is later served, the
+   * browser would render it inline. Failing the verify here causes the
+   * thumbnail URL to stay flagged in logs so the row can be cleaned up.
    */
   async verify(job: ThumbnailJob): Promise<void> {
     const res = await fetch(job.thumbnailUrl, { method: 'HEAD' });
     if (!res.ok) {
       throw new Error(`HEAD ${job.thumbnailUrl} returned ${res.status}`);
+    }
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.toLowerCase().startsWith('image/')) {
+      throw new Error(
+        `unexpected content-type "${contentType}" for ${job.thumbnailUrl}`,
+      );
     }
   }
 }

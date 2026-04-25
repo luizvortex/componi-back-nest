@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
+import { json, urlencoded } from 'express';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
@@ -38,6 +39,12 @@ async function bootstrap() {
 
   app.use(helmet());
   app.use(compression());
+  // Explicit body-size cap. 256 KB covers the largest legitimate payload
+  // (a component create with ~50-200 KB of source code) with headroom,
+  // and rejects anything larger as a clear DoS guard. Image uploads go
+  // direct-to-Supabase via signed URLs, never through this server.
+  app.use(json({ limit: '256kb' }));
+  app.use(urlencoded({ limit: '32kb', extended: true }));
   app.enableCors({
     origin: config.get<string[]>('app.corsOrigins'),
     credentials: true,

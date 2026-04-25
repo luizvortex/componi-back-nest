@@ -47,10 +47,14 @@ type RealtimeSocket = Socket<
  * Ack contract: `subscribe:component` takes a callback the server uses
  * to report success or a structured error code — easier to handle on
  * the client than parsing free-form `error` events.
+ *
+ * CORS: the origin allowlist is bound at runtime from `app.corsOrigins`
+ * so the gateway can't be opened from arbitrary origins. The decorator
+ * gets a permissive default; afterInit() narrows it before the server
+ * starts accepting connections.
  */
 @WebSocketGateway({
   namespace: '/realtime',
-  cors: { credentials: true },
 })
 export class RealtimeGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -59,6 +63,7 @@ export class RealtimeGateway
   private readonly maxSubscriptions: number;
   private readonly enabled: boolean;
   private readonly adapterStrategy: 'memory' | 'redis';
+  private readonly corsOrigins: string[];
 
   @WebSocketServer()
   readonly server!: Server<ClientToServerEvents, ServerToClientEvents>;
@@ -79,6 +84,7 @@ export class RealtimeGateway
       'realtime.adapter',
       'memory',
     );
+    this.corsOrigins = config.get<string[]>('app.corsOrigins') ?? [];
   }
 
   async afterInit(server: Server): Promise<void> {
@@ -86,6 +92,14 @@ export class RealtimeGateway
       this.logger.log('realtime disabled — gateway will reject all connections');
       return;
     }
+    // Bind CORS to the same allowlist the HTTP API uses. We do it here
+    // (not in the decorator) because the config isn't available at
+    // class-evaluation time. Empty list = restrict to same-origin only.
+    server.engine.opts.cors = {
+      origin: this.corsOrigins.length ? this.corsOrigins : false,
+      credentials: true,
+    };
+
     if (this.adapterStrategy === 'redis') {
       // Duplicate the existing client for pub + sub — Socket.IO needs
       // two dedicated subscribers, can't share with cache/throttler.
