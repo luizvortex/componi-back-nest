@@ -1,16 +1,17 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 
+import { EmbeddingsBackfillService } from './embeddings-backfill.service';
 import { PurgeService } from './purge.service';
 
 /**
- * Scheduled background maintenance. Currently just the soft-delete
- * retention cron; more cleanup jobs (stale sessions, orphaned uploads)
- * will land here as they surface.
+ * Scheduled background maintenance — soft-delete retention, embedding
+ * backfill, and any future periodic chores. EmbeddingsModule is global
+ * so we don't need to import it explicitly.
  */
 @Module({
   imports: [ScheduleModule.forRoot()],
-  providers: [PurgeService],
-  exports: [PurgeService],
+  providers: [PurgeService, EmbeddingsBackfillService],
+  exports: [PurgeService, EmbeddingsBackfillService],
 })
 export class HousekeepingModule {}
