@@ -75,16 +75,12 @@ export class ComponentsService {
       }
 
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
-      // Drafts don't affect the trending feed — skip invalidation until publish.
       if (!row.isDraft) {
         await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
       }
       return row;
     });
 
-    // Only enqueue embedding for published components. The embed job runs
-    // after publish() so the vector isn't wasted on a draft that may never
-    // go live (or whose content will change many times before it does).
     if (!saved.isDraft) {
       await this.embeddings.enqueue(saved.id);
     }
@@ -100,7 +96,6 @@ export class ComponentsService {
       if (!parent.isPublic && parent.authorId !== user.id) {
         throw new NotFoundException('Component not found');
       }
-      // Drafts are never forkable — they're not public yet.
       if (parent.isDraft) throw new NotFoundException('Component not found');
       if (parent.authorId !== user.id && await this.blocks.isBlockedEitherWay(user.id, parent.authorId)) {
         throw new NotFoundException('Component not found');
@@ -156,9 +151,7 @@ export class ComponentsService {
         user.id,
         `fork:${fork.id}`,
       );
-      await Promise.all([
-        this.cache.invalidateTags(`component:${parent.id}`, 'feed:trending'),
-      ]);
+      await this.cache.invalidateTags(`component:${parent.id}`, 'feed:trending');
       return fork;
     });
 
@@ -171,7 +164,6 @@ export class ComponentsService {
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.author', 'author')
       .where('c.deletedAt IS NULL')
-      // Drafts are never surfaced in list endpoints — use GET /components/drafts.
       .andWhere('c.isDraft = false');
 
     if (user) {
@@ -213,7 +205,6 @@ export class ComponentsService {
     return qb.getMany();
   }
 
-  /** Returns all drafts owned by the requesting user, newest first. */
   async listDrafts(user: AuthUser): Promise<Component[]> {
     return this.components.find({
       where: { authorId: user.id, isDraft: true },
@@ -223,7 +214,6 @@ export class ComponentsService {
   }
 
   async findById(id: string, user?: AuthUser): Promise<Component> {
-    // Try the cache first — only public, non-draft components end up here.
     const cached = await this.cache.get<Component>(`component:${id}:public`);
     if (cached) {
       if (user && user.id !== cached.authorId && await this.blocks.isBlockedEitherWay(user.id, cached.authorId)) {
@@ -240,22 +230,18 @@ export class ComponentsService {
     if (!found.isPublic && found.authorId !== user?.id) {
       throw new NotFoundException('Component not found');
     }
-    // Drafts are only accessible to the author — treat as 404 for everyone else
-    // so the endpoint doesn't leak that the resource exists.
     if (found.isDraft && found.authorId !== user?.id) {
       throw new NotFoundException('Component not found');
     }
     if (user && user.id !== found.authorId && await this.blocks.isBlockedEitherWay(user.id, found.authorId)) {
       throw new NotFoundException('Component not found');
     }
-    // Only cache public, published components.
     if (found.isPublic && !found.isDraft) {
       await this.cache.set(`component:${id}:public`, found, 120, [`component:${id}`]);
     }
     return found;
   }
 
-  /** Walks the fork chain upward (parents) and downward (direct forks). */
   async lineage(id: string, user?: AuthUser): Promise<{
     component: Component;
     ancestors: Component[];
@@ -293,30 +279,10 @@ export class ComponentsService {
     }
 
     let embeddingRelevantChange = await this.applyMetadata(component, dto);
-
-    // Update code/dependencies in-place on the current version.
-    if ((dto.code !== undefined || dto.dependencies !== undefined) && component.currentVersionId) {
-      const version = await this.versions.findOne({ where: { id: component.currentVersionId } });
-      if (version) {
-        if (dto.code !== undefined) {
-          version.code = dto.code;
-          embeddingRelevantChange = true;
-        }
-        if (dto.dependencies !== undefined) version.dependencies = dto.dependencies;
-        await this.versions.save(version);
-      }
-    }
-
-    if (dto.tagSlugs !== undefined) {
-      await this.dataSource.transaction(async (trx) => {
-        await trx.getRepository(ComponentTag).delete({ componentId: id });
-        if (dto.tagSlugs!.length) await this.attachTags(trx, id, dto.tagSlugs!);
-      });
-    }
+    if (await this.updateDraftVersion(component, dto)) embeddingRelevantChange = true;
+    if (dto.tagSlugs !== undefined) await this.replaceTags(id, dto.tagSlugs);
 
     const saved = await this.components.save(component);
-    // No cache to bust — drafts are never cached.
-    // Mark embedding as stale so publish() enqueues a fresh vector.
     if (embeddingRelevantChange) {
       saved.embeddingGeneratedAt = null;
       await this.components.save(saved);
@@ -340,12 +306,10 @@ export class ComponentsService {
 
     component.isDraft = false;
     const saved = await this.components.save(component);
-
     await Promise.all([
       this.cache.invalidateTags('feed:trending', `author:${user.id}`),
       this.embeddings.enqueue(id),
     ]);
-
     return saved;
   }
 
@@ -354,9 +318,7 @@ export class ComponentsService {
     const embeddingRelevantChange = await this.applyMetadata(component, dto);
     const saved = await this.components.save(component);
     await this.cache.invalidateTags(`component:${id}`, `author:${user.id}`, 'feed:trending');
-    if (embeddingRelevantChange) {
-      await this.embeddings.enqueue(id);
-    }
+    if (embeddingRelevantChange) await this.embeddings.enqueue(id);
     return saved;
   }
 
@@ -385,7 +347,7 @@ export class ComponentsService {
   // helpers
   // ────────────────────────────────────────────────────────────────────
 
-  /** Loads a component by id and asserts the caller is the owner (404 on any mismatch). */
+  /** Loads a component and asserts the caller is the owner (404 on any mismatch). */
   private async loadOwned(id: string, user: AuthUser): Promise<Component> {
     const component = await this.components.findOne({ where: { id } });
     if (!component) throw new NotFoundException('Component not found');
@@ -393,11 +355,31 @@ export class ComponentsService {
     return component;
   }
 
-  /**
-   * Applies common metadata fields (name, description, framework, category,
-   * isPublic) from a DTO onto a component entity. Returns true when a
-   * change relevant to the semantic embedding was made.
-   */
+  /** Updates code and/or dependencies in-place on the current draft version. Returns true if the embedding input changed. */
+  private async updateDraftVersion(
+    component: Component,
+    dto: { code?: string; dependencies?: Record<string, string> },
+  ): Promise<boolean> {
+    if (!component.currentVersionId) return false;
+    if (dto.code === undefined && dto.dependencies === undefined) return false;
+    const version = await this.versions.findOne({ where: { id: component.currentVersionId } });
+    if (!version) return false;
+    let changed = false;
+    if (dto.code !== undefined) { version.code = dto.code; changed = true; }
+    if (dto.dependencies !== undefined) version.dependencies = dto.dependencies;
+    await this.versions.save(version);
+    return changed;
+  }
+
+  /** Replaces all tags on a component with the given set (transactional). */
+  private async replaceTags(componentId: string, tagSlugs: string[]): Promise<void> {
+    await this.dataSource.transaction(async (trx) => {
+      await trx.getRepository(ComponentTag).delete({ componentId });
+      if (tagSlugs.length) await this.attachTags(trx, componentId, tagSlugs);
+    });
+  }
+
+  /** Applies metadata fields from a DTO. Returns true if the embedding input changed. */
   private async applyMetadata(
     component: Component,
     dto: {
@@ -450,7 +432,7 @@ export class ComponentsService {
       .insert(all.map((t) => ({ componentId, tagId: t.id })))
       .catch((err) => {
         if (err instanceof QueryFailedError && (err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
-          return; // tag already attached, idempotent
+          return;
         }
         throw err;
       });
