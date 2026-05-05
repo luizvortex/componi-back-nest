@@ -21,6 +21,7 @@ import { ThumbnailsService } from '../thumbnails/thumbnails.service';
 import { CreateComponentDto } from './dto/create-component.dto';
 import { ForkComponentDto } from './dto/fork-component.dto';
 import { ListComponentsDto } from './dto/list-components.dto';
+import { SaveDraftDto } from './dto/save-draft.dto';
 import { UpdateComponentDto } from './dto/update-component.dto';
 
 const SLUG_RETRY_LIMIT = 5;
@@ -53,6 +54,7 @@ export class ComponentsService {
           framework: dto.framework,
           category: dto.category ?? null,
           isPublic: dto.isPublic ?? true,
+          isDraft: dto.isDraft ?? false,
         }),
       );
 
@@ -72,15 +74,19 @@ export class ComponentsService {
       }
 
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
-      await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
+      // Drafts don’t affect the trending feed — skip invalidation until publish.
+      if (!row.isDraft) {
+        await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
+      }
       return row;
     });
 
-    // Post-commit: the row is visible to other sessions — enqueue an
-    // embedding job so semantic search picks it up. Fire-and-forget at
-    // the service level (the service itself swallows errors when
-    // workers are disabled; the cron is the safety net).
-    await this.embeddings.enqueue(saved.id);
+    // Only enqueue embedding for published components. The embed job runs
+    // after publish() so the vector isn’t wasted on a draft that may never
+    // go live (or whose content will change many times before it does).
+    if (!saved.isDraft) {
+      await this.embeddings.enqueue(saved.id);
+    }
     return saved;
   }
 
@@ -93,6 +99,8 @@ export class ComponentsService {
       if (!parent.isPublic && parent.authorId !== user.id) {
         throw new NotFoundException('Component not found');
       }
+      // Drafts are never forkable — they’re not public yet.
+      if (parent.isDraft) throw new NotFoundException('Component not found');
       if (parent.authorId !== user.id && await this.blocks.isBlockedEitherWay(user.id, parent.authorId)) {
         throw new NotFoundException('Component not found');
       }
@@ -153,7 +161,6 @@ export class ComponentsService {
       return fork;
     });
 
-    // Fork gets its own embedding — same input assembly as create.
     await this.embeddings.enqueue(fork.id);
     return fork;
   }
@@ -162,7 +169,9 @@ export class ComponentsService {
     const qb = this.components
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.author', 'author')
-      .where('c.deletedAt IS NULL');
+      .where('c.deletedAt IS NULL')
+      // Drafts are never surfaced in list endpoints — use GET /components/drafts.
+      .andWhere('c.isDraft = false');
 
     if (user) {
       qb.andWhere('(c.isPublic = true OR c.authorId = :uid)', { uid: user.id });
@@ -203,9 +212,17 @@ export class ComponentsService {
     return qb.getMany();
   }
 
+  /** Returns all drafts owned by the requesting user, newest first. */
+  async listDrafts(user: AuthUser): Promise<Component[]> {
+    return this.components.find({
+      where: { authorId: user.id, isDraft: true },
+      relations: { componentTags: { tag: true } },
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
   async findById(id: string, user?: AuthUser): Promise<Component> {
-    // Try the cache first — only public components end up here, so there's
-    // no risk of leaking private data across viewers.
+    // Try the cache first — only public, non-draft components end up here.
     const cached = await this.cache.get<Component>(`component:${id}:public`);
     if (cached) {
       if (user && user.id !== cached.authorId && await this.blocks.isBlockedEitherWay(user.id, cached.authorId)) {
@@ -222,10 +239,16 @@ export class ComponentsService {
     if (!found.isPublic && found.authorId !== user?.id) {
       throw new NotFoundException('Component not found');
     }
+    // Drafts are only accessible to the author — treat as 404 for everyone else
+    // so the endpoint doesn’t leak that the resource exists.
+    if (found.isDraft && found.authorId !== user?.id) {
+      throw new NotFoundException('Component not found');
+    }
     if (user && user.id !== found.authorId && await this.blocks.isBlockedEitherWay(user.id, found.authorId)) {
       throw new NotFoundException('Component not found');
     }
-    if (found.isPublic) {
+    // Only cache public, published components.
+    if (found.isPublic && !found.isDraft) {
       await this.cache.set(`component:${id}:public`, found, 120, [`component:${id}`]);
     }
     return found;
@@ -259,16 +282,108 @@ export class ComponentsService {
     return { component, ancestors, descendants };
   }
 
+  /**
+   * Auto-saves a draft: updates metadata and/or code in-place on the
+   * current version without creating a new version entry. All fields are
+   * optional so the frontend can debounce and send only what changed.
+   * Throws 400 if the component is already published — use update() +
+   * the versions endpoint for post-publish iterations.
+   */
+  async saveDraft(id: string, user: AuthUser, dto: SaveDraftDto): Promise<Component> {
+    const component = await this.components.findOne({ where: { id } });
+    if (!component) throw new NotFoundException('Component not found');
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    if (!component.isDraft) {
+      throw new BadRequestException(
+        'Component is already published. Use PATCH /components/:id to update metadata ' +
+        'or POST /components/:id/versions to publish a new version.',
+      );
+    }
+
+    let embeddingRelevantChange = false;
+
+    if (dto.name && dto.name !== component.name) {
+      component.name = dto.name;
+      component.slug = await this.findUniqueSlug(user.id, this.slugify(dto.name), component.id);
+      embeddingRelevantChange = true;
+    }
+    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
+      component.description = dto.description ?? null;
+      embeddingRelevantChange = true;
+    }
+    if (dto.framework && dto.framework !== component.framework) {
+      component.framework = dto.framework;
+      embeddingRelevantChange = true;
+    }
+    if (dto.category !== undefined) component.category = dto.category ?? null;
+    if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
+
+    // Update code/dependencies in-place on the current version.
+    if ((dto.code !== undefined || dto.dependencies !== undefined) && component.currentVersionId) {
+      const version = await this.versions.findOne({ where: { id: component.currentVersionId } });
+      if (version) {
+        if (dto.code !== undefined) {
+          version.code = dto.code;
+          embeddingRelevantChange = true;
+        }
+        if (dto.dependencies !== undefined) version.dependencies = dto.dependencies;
+        await this.versions.save(version);
+      }
+    }
+
+    if (dto.tagSlugs !== undefined) {
+      // Replace all existing tags with the new set.
+      await this.dataSource.transaction(async (trx) => {
+        await trx.getRepository(ComponentTag).delete({ componentId: id });
+        if (dto.tagSlugs!.length) await this.attachTags(trx, id, dto.tagSlugs!);
+      });
+    }
+
+    const saved = await this.components.save(component);
+    // No cache to bust — drafts are never cached.
+    // Mark embedding as stale so publish() enqueues a fresh vector.
+    if (embeddingRelevantChange) {
+      saved.embeddingGeneratedAt = null;
+      await this.components.save(saved);
+    }
+    return saved;
+  }
+
+  /**
+   * Transitions a draft to published. Validates that the component has
+   * the minimum viable content (name + code via currentVersion) before
+   * making it visible, then enqueues the embedding job.
+   */
+  async publish(id: string, user: AuthUser): Promise<Component> {
+    const component = await this.components.findOne({
+      where: { id },
+      relations: { componentTags: { tag: true } },
+    });
+    if (!component) throw new NotFoundException('Component not found');
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    if (!component.isDraft) {
+      throw new BadRequestException('Component is already published.');
+    }
+    if (!component.currentVersionId) {
+      throw new BadRequestException('Draft has no code yet — save code before publishing.');
+    }
+
+    component.isDraft = false;
+    const saved = await this.components.save(component);
+
+    await Promise.all([
+      this.cache.invalidateTags('feed:trending', `author:${user.id}`),
+      this.embeddings.enqueue(id),
+    ]);
+
+    return saved;
+  }
+
   async update(id: string, user: AuthUser, dto: UpdateComponentDto): Promise<Component> {
     const component = await this.components.findOne({ where: { id } });
     if (!component) throw new NotFoundException('Component not found');
-    // 404 (not 403) on ownership mismatch so the endpoint doesn't
-    // double as a resource-existence oracle for other users' IDs.
     if (component.authorId !== user.id) throw new NotFoundException('Component not found');
 
-    // Track whether any field that feeds the semantic-embedding input
-    // changed. If only `isPublic`/`category` flipped the vector would
-    // still be valid — no point burning CPU re-embedding.
     let embeddingRelevantChange = false;
     if (dto.name && dto.name !== component.name) {
       component.name = dto.name;
@@ -320,10 +435,9 @@ export class ComponentsService {
     if (component.authorId !== user.id) throw new NotFoundException('Component not found');
     component.thumbnailUrl = thumbnailUrl;
     const saved = await this.components.save(component);
-    await this.cache.invalidateTags(`component:${id}`, 'feed:trending');
-    // Fire-and-forget reachability check. Failure doesn't block the
-    // save — a broken URL is logged by the worker and surfaced via
-    // observability, not via the user-facing 200/5xx response.
+    if (!component.isDraft) {
+      await this.cache.invalidateTags(`component:${id}`, 'feed:trending');
+    }
     await this.thumbnails.enqueue({ componentId: id, thumbnailUrl });
     return saved;
   }
