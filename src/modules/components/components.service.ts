@@ -8,6 +8,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 
 import { Component } from '../../database/entities/component.entity';
+import type { ComponentFramework } from '../../database/entities/component.entity';
 import { ComponentVersion } from '../../database/entities/component-version.entity';
 import { ComponentTag } from '../../database/entities/component-tag.entity';
 import { Tag } from '../../database/entities/tag.entity';
@@ -74,7 +75,7 @@ export class ComponentsService {
       }
 
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
-      // Drafts don’t affect the trending feed — skip invalidation until publish.
+      // Drafts don't affect the trending feed — skip invalidation until publish.
       if (!row.isDraft) {
         await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
       }
@@ -82,7 +83,7 @@ export class ComponentsService {
     });
 
     // Only enqueue embedding for published components. The embed job runs
-    // after publish() so the vector isn’t wasted on a draft that may never
+    // after publish() so the vector isn't wasted on a draft that may never
     // go live (or whose content will change many times before it does).
     if (!saved.isDraft) {
       await this.embeddings.enqueue(saved.id);
@@ -99,7 +100,7 @@ export class ComponentsService {
       if (!parent.isPublic && parent.authorId !== user.id) {
         throw new NotFoundException('Component not found');
       }
-      // Drafts are never forkable — they’re not public yet.
+      // Drafts are never forkable — they're not public yet.
       if (parent.isDraft) throw new NotFoundException('Component not found');
       if (parent.authorId !== user.id && await this.blocks.isBlockedEitherWay(user.id, parent.authorId)) {
         throw new NotFoundException('Component not found');
@@ -240,7 +241,7 @@ export class ComponentsService {
       throw new NotFoundException('Component not found');
     }
     // Drafts are only accessible to the author — treat as 404 for everyone else
-    // so the endpoint doesn’t leak that the resource exists.
+    // so the endpoint doesn't leak that the resource exists.
     if (found.isDraft && found.authorId !== user?.id) {
       throw new NotFoundException('Component not found');
     }
@@ -300,23 +301,7 @@ export class ComponentsService {
       );
     }
 
-    let embeddingRelevantChange = false;
-
-    if (dto.name && dto.name !== component.name) {
-      component.name = dto.name;
-      component.slug = await this.findUniqueSlug(user.id, this.slugify(dto.name), component.id);
-      embeddingRelevantChange = true;
-    }
-    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
-      component.description = dto.description ?? null;
-      embeddingRelevantChange = true;
-    }
-    if (dto.framework && dto.framework !== component.framework) {
-      component.framework = dto.framework;
-      embeddingRelevantChange = true;
-    }
-    if (dto.category !== undefined) component.category = dto.category ?? null;
-    if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
+    let embeddingRelevantChange = await this.applyMetadata(component, dto);
 
     // Update code/dependencies in-place on the current version.
     if ((dto.code !== undefined || dto.dependencies !== undefined) && component.currentVersionId) {
@@ -384,22 +369,7 @@ export class ComponentsService {
     if (!component) throw new NotFoundException('Component not found');
     if (component.authorId !== user.id) throw new NotFoundException('Component not found');
 
-    let embeddingRelevantChange = false;
-    if (dto.name && dto.name !== component.name) {
-      component.name = dto.name;
-      component.slug = await this.findUniqueSlug(user.id, this.slugify(dto.name), component.id);
-      embeddingRelevantChange = true;
-    }
-    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
-      component.description = dto.description ?? null;
-      embeddingRelevantChange = true;
-    }
-    if (dto.framework && dto.framework !== component.framework) {
-      component.framework = dto.framework;
-      embeddingRelevantChange = true;
-    }
-    if (dto.category !== undefined) component.category = dto.category ?? null;
-    if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
+    const embeddingRelevantChange = await this.applyMetadata(component, dto);
 
     const saved = await this.components.save(component);
     await this.cache.invalidateTags(
@@ -445,6 +415,40 @@ export class ComponentsService {
   // ────────────────────────────────────────────────────────────────────
   // helpers
   // ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Applies common metadata fields (name, description, framework, category,
+   * isPublic) from a DTO onto a component entity. Returns true when a
+   * change relevant to the semantic embedding was made.
+   */
+  private async applyMetadata(
+    component: Component,
+    dto: {
+      name?: string;
+      description?: string;
+      framework?: ComponentFramework;
+      category?: string;
+      isPublic?: boolean;
+    },
+  ): Promise<boolean> {
+    let changed = false;
+    if (dto.name && dto.name !== component.name) {
+      component.name = dto.name;
+      component.slug = await this.findUniqueSlug(component.authorId, this.slugify(dto.name), component.id);
+      changed = true;
+    }
+    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
+      component.description = dto.description ?? null;
+      changed = true;
+    }
+    if (dto.framework && dto.framework !== component.framework) {
+      component.framework = dto.framework;
+      changed = true;
+    }
+    if (dto.category !== undefined) component.category = dto.category ?? null;
+    if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
+    return changed;
+  }
 
   private async attachTags(
     trx: import('typeorm').EntityManager,
