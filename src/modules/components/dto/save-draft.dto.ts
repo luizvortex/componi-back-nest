@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
   IsBoolean,
@@ -19,12 +19,19 @@ import {
 
 const FRAMEWORKS: ComponentFramework[] = ['react', 'vue', 'svelte', 'solid', 'angular', 'other'];
 
-export class CreateComponentDto {
-  @ApiProperty({ example: 'Floating Action Carousel' })
+/**
+ * All fields are optional — designed for auto-save from the inline editor.
+ * Code is updated in-place on the current version (no new version is created).
+ * Only works on components where isDraft = true; use the versions endpoint for
+ * post-publish code iterations.
+ */
+export class SaveDraftDto {
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(120)
-  name!: string;
+  name?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -32,33 +39,32 @@ export class CreateComponentDto {
   @MaxLength(2000)
   description?: string;
 
-  @ApiProperty({ enum: FRAMEWORKS, default: 'react' })
+  @ApiPropertyOptional({ enum: FRAMEWORKS })
+  @IsOptional()
   @IsIn(FRAMEWORKS)
-  framework: ComponentFramework = 'react';
+  framework?: ComponentFramework;
 
-  @ApiPropertyOptional({ example: 'carousel' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   @MaxLength(60)
   category?: string;
 
-  @ApiProperty({
-    description: `Source code for the initial version (v1). Capped at ${COMPONENT_CODE_MAX_BYTES} bytes.`,
+  @ApiPropertyOptional({
+    description: `Updated source code. Overwrites the draft version in-place. Capped at ${COMPONENT_CODE_MAX_BYTES} bytes.`,
   })
+  @IsOptional()
   @IsString()
   @MaxLength(COMPONENT_CODE_MAX_BYTES)
-  code!: string;
+  code?: string;
 
-  @ApiPropertyOptional({
-    description: 'Map of npm package → semver range. Up to 50 entries, 8KB total.',
-    example: { 'framer-motion': '^11.0.0' },
-  })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsObject()
   @Validate(DependenciesConstraint)
   dependencies?: Record<string, string>;
 
-  @ApiPropertyOptional({ default: true })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
   isPublic?: boolean;
@@ -69,11 +75,4 @@ export class CreateComponentDto {
   @IsString({ each: true })
   @MaxLength(40, { each: true })
   tagSlugs?: string[];
-
-  /** When true the component is saved as a draft and not visible in any feed.
-   *  Call POST /components/:id/publish to make it live. */
-  @ApiPropertyOptional({ default: false })
-  @IsOptional()
-  @IsBoolean()
-  isDraft?: boolean;
 }

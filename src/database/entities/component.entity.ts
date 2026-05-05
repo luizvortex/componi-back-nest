@@ -61,6 +61,11 @@ export class Component {
   @Column({ type: 'boolean', default: true })
   isPublic!: boolean;
 
+  /** When true the component is a work-in-progress, hidden from all feeds.
+   *  Only the author can read/edit it. Call POST /components/:id/publish to make it live. */
+  @Column({ type: 'boolean', default: false })
+  isDraft!: boolean;
+
   @Column({ type: 'uuid', nullable: true })
   currentVersionId!: string | null;
 
