@@ -283,17 +283,8 @@ export class ComponentsService {
     return { component, ancestors, descendants };
   }
 
-  /**
-   * Auto-saves a draft: updates metadata and/or code in-place on the
-   * current version without creating a new version entry. All fields are
-   * optional so the frontend can debounce and send only what changed.
-   * Throws 400 if the component is already published — use update() +
-   * the versions endpoint for post-publish iterations.
-   */
   async saveDraft(id: string, user: AuthUser, dto: SaveDraftDto): Promise<Component> {
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    const component = await this.loadOwned(id, user);
     if (!component.isDraft) {
       throw new BadRequestException(
         'Component is already published. Use PATCH /components/:id to update metadata ' +
@@ -317,7 +308,6 @@ export class ComponentsService {
     }
 
     if (dto.tagSlugs !== undefined) {
-      // Replace all existing tags with the new set.
       await this.dataSource.transaction(async (trx) => {
         await trx.getRepository(ComponentTag).delete({ componentId: id });
         if (dto.tagSlugs!.length) await this.attachTags(trx, id, dto.tagSlugs!);
@@ -334,11 +324,6 @@ export class ComponentsService {
     return saved;
   }
 
-  /**
-   * Transitions a draft to published. Validates that the component has
-   * the minimum viable content (name + code via currentVersion) before
-   * making it visible, then enqueues the embedding job.
-   */
   async publish(id: string, user: AuthUser): Promise<Component> {
     const component = await this.components.findOne({
       where: { id },
@@ -365,18 +350,10 @@ export class ComponentsService {
   }
 
   async update(id: string, user: AuthUser, dto: UpdateComponentDto): Promise<Component> {
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
-
+    const component = await this.loadOwned(id, user);
     const embeddingRelevantChange = await this.applyMetadata(component, dto);
-
     const saved = await this.components.save(component);
-    await this.cache.invalidateTags(
-      `component:${id}`,
-      `author:${user.id}`,
-      'feed:trending',
-    );
+    await this.cache.invalidateTags(`component:${id}`, `author:${user.id}`, 'feed:trending');
     if (embeddingRelevantChange) {
       await this.embeddings.enqueue(id);
     }
@@ -384,25 +361,17 @@ export class ComponentsService {
   }
 
   async remove(id: string, user: AuthUser): Promise<void> {
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    const component = await this.loadOwned(id, user);
     await this.dataSource.transaction(async (trx) => {
       await trx.getRepository(Component).softRemove(component);
       await trx.getRepository(User).decrement({ id: user.id }, 'componentsCount', 1);
     });
-    await this.cache.invalidateTags(
-      `component:${id}`,
-      `author:${user.id}`,
-      'feed:trending',
-    );
+    await this.cache.invalidateTags(`component:${id}`, `author:${user.id}`, 'feed:trending');
   }
 
   async setThumbnail(id: string, user: AuthUser, thumbnailUrl: string): Promise<Component> {
     this.assertThumbnailOriginAllowed(thumbnailUrl);
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    const component = await this.loadOwned(id, user);
     component.thumbnailUrl = thumbnailUrl;
     const saved = await this.components.save(component);
     if (!component.isDraft) {
@@ -415,6 +384,14 @@ export class ComponentsService {
   // ────────────────────────────────────────────────────────────────────
   // helpers
   // ────────────────────────────────────────────────────────────────────
+
+  /** Loads a component by id and asserts the caller is the owner (404 on any mismatch). */
+  private async loadOwned(id: string, user: AuthUser): Promise<Component> {
+    const component = await this.components.findOne({ where: { id } });
+    if (!component) throw new NotFoundException('Component not found');
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    return component;
+  }
 
   /**
    * Applies common metadata fields (name, description, framework, category,
