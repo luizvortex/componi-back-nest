@@ -61,10 +61,14 @@ export class Component {
   @Column({ type: 'boolean', default: true })
   isPublic!: boolean;
 
+  /** When true the component is a work-in-progress, hidden from all feeds.
+   *  Only the author can read/edit it. Call POST /components/:id/publish to make it live. */
+  @Column({ type: 'boolean', default: false })
+  isDraft!: boolean;
+
   @Column({ type: 'uuid', nullable: true })
   currentVersionId!: string | null;
 
-  /** Component this one was forked from. Powers the "remix lineage" graph. */
   @Column({ type: 'uuid', nullable: true })
   forkedFromId!: string | null;
 
@@ -90,18 +94,6 @@ export class Component {
   @Column({ type: 'int', default: 0 })
   sharesCount!: number;
 
-  /**
-   * Timestamp of the last semantic-embedding regeneration. The vector
-   * itself is NOT declared on the entity — `components.embedding` is a
-   * pgvector column read/written only via raw SQL from EmbeddingsService
-   * and SemanticSearchService. Keeping it off the entity prevents
-   * accidental inclusion in SELECTs (each row would carry 1.5 KB of
-   * extra payload and blow our Supabase bandwidth budget).
-   *
-   * Null = embedding missing (new row, backfill pending, or failed
-   * generation). Rows where `embeddingGeneratedAt < updatedAt` are
-   * stale and picked up by the backfill cron.
-   */
   @Column({ type: 'timestamptz', nullable: true })
   embeddingGeneratedAt!: Date | null;
 

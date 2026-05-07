@@ -11,7 +11,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { OptionalAuth } from '../../common/decorators/optional-auth.decorator';
@@ -19,6 +19,7 @@ import type { AuthUser } from '../../common/types/auth-user.type';
 import { CreateComponentDto } from './dto/create-component.dto';
 import { ForkComponentDto } from './dto/fork-component.dto';
 import { ListComponentsDto } from './dto/list-components.dto';
+import { SaveDraftDto } from './dto/save-draft.dto';
 import { SetThumbnailDto } from './dto/set-thumbnail.dto';
 import { UpdateComponentDto } from './dto/update-component.dto';
 import { ComponentsService } from './components.service';
@@ -33,6 +34,13 @@ export class ComponentsController {
   @Get()
   list(@Query() query: ListComponentsDto, @CurrentUser() user?: AuthUser) {
     return this.service.list(query, user);
+  }
+
+  // NOTE: declared before :id so Express doesn't treat "drafts" as a UUID.
+  @Get('drafts')
+  @ApiOperation({ summary: 'List all drafts owned by the current user' })
+  listDrafts(@CurrentUser() user: AuthUser) {
+    return this.service.listDrafts(user);
   }
 
   @OptionalAuth()
@@ -59,6 +67,23 @@ export class ComponentsController {
     @Body() dto: ForkComponentDto,
   ) {
     return this.service.fork(id, user, dto);
+  }
+
+  @Patch(':id/draft')
+  @ApiOperation({ summary: 'Auto-save a draft (all fields optional, code updated in-place)' })
+  saveDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+    @Body() dto: SaveDraftDto,
+  ) {
+    return this.service.saveDraft(id, user, dto);
+  }
+
+  @Post(':id/publish')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Publish a draft — makes it visible in feeds' })
+  publish(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.service.publish(id, user);
   }
 
   @Patch(':id')

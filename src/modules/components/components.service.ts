@@ -8,6 +8,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 
 import { Component } from '../../database/entities/component.entity';
+import type { ComponentFramework } from '../../database/entities/component.entity';
 import { ComponentVersion } from '../../database/entities/component-version.entity';
 import { ComponentTag } from '../../database/entities/component-tag.entity';
 import { Tag } from '../../database/entities/tag.entity';
@@ -21,6 +22,7 @@ import { ThumbnailsService } from '../thumbnails/thumbnails.service';
 import { CreateComponentDto } from './dto/create-component.dto';
 import { ForkComponentDto } from './dto/fork-component.dto';
 import { ListComponentsDto } from './dto/list-components.dto';
+import { SaveDraftDto } from './dto/save-draft.dto';
 import { UpdateComponentDto } from './dto/update-component.dto';
 
 const SLUG_RETRY_LIMIT = 5;
@@ -53,6 +55,7 @@ export class ComponentsService {
           framework: dto.framework,
           category: dto.category ?? null,
           isPublic: dto.isPublic ?? true,
+          isDraft: dto.isDraft ?? false,
         }),
       );
 
@@ -72,15 +75,15 @@ export class ComponentsService {
       }
 
       await trx.getRepository(User).increment({ id: user.id }, 'componentsCount', 1);
-      await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
+      if (!row.isDraft) {
+        await this.cache.invalidateTags('feed:trending', `author:${user.id}`);
+      }
       return row;
     });
 
-    // Post-commit: the row is visible to other sessions — enqueue an
-    // embedding job so semantic search picks it up. Fire-and-forget at
-    // the service level (the service itself swallows errors when
-    // workers are disabled; the cron is the safety net).
-    await this.embeddings.enqueue(saved.id);
+    if (!saved.isDraft) {
+      await this.embeddings.enqueue(saved.id);
+    }
     return saved;
   }
 
@@ -93,6 +96,7 @@ export class ComponentsService {
       if (!parent.isPublic && parent.authorId !== user.id) {
         throw new NotFoundException('Component not found');
       }
+      if (parent.isDraft) throw new NotFoundException('Component not found');
       if (parent.authorId !== user.id && await this.blocks.isBlockedEitherWay(user.id, parent.authorId)) {
         throw new NotFoundException('Component not found');
       }
@@ -147,13 +151,10 @@ export class ComponentsService {
         user.id,
         `fork:${fork.id}`,
       );
-      await Promise.all([
-        this.cache.invalidateTags(`component:${parent.id}`, 'feed:trending'),
-      ]);
+      await this.cache.invalidateTags(`component:${parent.id}`, 'feed:trending');
       return fork;
     });
 
-    // Fork gets its own embedding — same input assembly as create.
     await this.embeddings.enqueue(fork.id);
     return fork;
   }
@@ -162,7 +163,8 @@ export class ComponentsService {
     const qb = this.components
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.author', 'author')
-      .where('c.deletedAt IS NULL');
+      .where('c.deletedAt IS NULL')
+      .andWhere('c.isDraft = false');
 
     if (user) {
       qb.andWhere('(c.isPublic = true OR c.authorId = :uid)', { uid: user.id });
@@ -203,9 +205,15 @@ export class ComponentsService {
     return qb.getMany();
   }
 
+  async listDrafts(user: AuthUser): Promise<Component[]> {
+    return this.components.find({
+      where: { authorId: user.id, isDraft: true },
+      relations: { componentTags: { tag: true } },
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
   async findById(id: string, user?: AuthUser): Promise<Component> {
-    // Try the cache first — only public components end up here, so there's
-    // no risk of leaking private data across viewers.
     const cached = await this.cache.get<Component>(`component:${id}:public`);
     if (cached) {
       if (user && user.id !== cached.authorId && await this.blocks.isBlockedEitherWay(user.id, cached.authorId)) {
@@ -222,16 +230,18 @@ export class ComponentsService {
     if (!found.isPublic && found.authorId !== user?.id) {
       throw new NotFoundException('Component not found');
     }
+    if (found.isDraft && found.authorId !== user?.id) {
+      throw new NotFoundException('Component not found');
+    }
     if (user && user.id !== found.authorId && await this.blocks.isBlockedEitherWay(user.id, found.authorId)) {
       throw new NotFoundException('Component not found');
     }
-    if (found.isPublic) {
+    if (found.isPublic && !found.isDraft) {
       await this.cache.set(`component:${id}:public`, found, 120, [`component:${id}`]);
     }
     return found;
   }
 
-  /** Walks the fork chain upward (parents) and downward (direct forks). */
   async lineage(id: string, user?: AuthUser): Promise<{
     component: Component;
     ancestors: Component[];
@@ -259,78 +269,141 @@ export class ComponentsService {
     return { component, ancestors, descendants };
   }
 
-  async update(id: string, user: AuthUser, dto: UpdateComponentDto): Promise<Component> {
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    // 404 (not 403) on ownership mismatch so the endpoint doesn't
-    // double as a resource-existence oracle for other users' IDs.
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+  async saveDraft(id: string, user: AuthUser, dto: SaveDraftDto): Promise<Component> {
+    const component = await this.loadOwned(id, user);
+    if (!component.isDraft) {
+      throw new BadRequestException(
+        'Component is already published. Use PATCH /components/:id to update metadata ' +
+        'or POST /components/:id/versions to publish a new version.',
+      );
+    }
 
-    // Track whether any field that feeds the semantic-embedding input
-    // changed. If only `isPublic`/`category` flipped the vector would
-    // still be valid — no point burning CPU re-embedding.
-    let embeddingRelevantChange = false;
-    if (dto.name && dto.name !== component.name) {
-      component.name = dto.name;
-      component.slug = await this.findUniqueSlug(user.id, this.slugify(dto.name), component.id);
-      embeddingRelevantChange = true;
-    }
-    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
-      component.description = dto.description ?? null;
-      embeddingRelevantChange = true;
-    }
-    if (dto.framework && dto.framework !== component.framework) {
-      component.framework = dto.framework;
-      embeddingRelevantChange = true;
-    }
-    if (dto.category !== undefined) component.category = dto.category ?? null;
-    if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
+    let embeddingRelevantChange = await this.applyMetadata(component, dto);
+    if (await this.updateDraftVersion(component, dto)) embeddingRelevantChange = true;
+    if (dto.tagSlugs !== undefined) await this.replaceTags(id, dto.tagSlugs);
 
     const saved = await this.components.save(component);
-    await this.cache.invalidateTags(
-      `component:${id}`,
-      `author:${user.id}`,
-      'feed:trending',
-    );
     if (embeddingRelevantChange) {
-      await this.embeddings.enqueue(id);
+      saved.embeddingGeneratedAt = null;
+      await this.components.save(saved);
     }
+    return saved;
+  }
+
+  async publish(id: string, user: AuthUser): Promise<Component> {
+    const component = await this.components.findOne({
+      where: { id },
+      relations: { componentTags: { tag: true } },
+    });
+    if (!component) throw new NotFoundException('Component not found');
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    if (!component.isDraft) {
+      throw new BadRequestException('Component is already published.');
+    }
+    if (!component.currentVersionId) {
+      throw new BadRequestException('Draft has no code yet — save code before publishing.');
+    }
+
+    component.isDraft = false;
+    const saved = await this.components.save(component);
+    await Promise.all([
+      this.cache.invalidateTags('feed:trending', `author:${user.id}`),
+      this.embeddings.enqueue(id),
+    ]);
+    return saved;
+  }
+
+  async update(id: string, user: AuthUser, dto: UpdateComponentDto): Promise<Component> {
+    const component = await this.loadOwned(id, user);
+    const embeddingRelevantChange = await this.applyMetadata(component, dto);
+    const saved = await this.components.save(component);
+    await this.cache.invalidateTags(`component:${id}`, `author:${user.id}`, 'feed:trending');
+    if (embeddingRelevantChange) await this.embeddings.enqueue(id);
     return saved;
   }
 
   async remove(id: string, user: AuthUser): Promise<void> {
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    const component = await this.loadOwned(id, user);
     await this.dataSource.transaction(async (trx) => {
       await trx.getRepository(Component).softRemove(component);
       await trx.getRepository(User).decrement({ id: user.id }, 'componentsCount', 1);
     });
-    await this.cache.invalidateTags(
-      `component:${id}`,
-      `author:${user.id}`,
-      'feed:trending',
-    );
+    await this.cache.invalidateTags(`component:${id}`, `author:${user.id}`, 'feed:trending');
   }
 
   async setThumbnail(id: string, user: AuthUser, thumbnailUrl: string): Promise<Component> {
     this.assertThumbnailOriginAllowed(thumbnailUrl);
-    const component = await this.components.findOne({ where: { id } });
-    if (!component) throw new NotFoundException('Component not found');
-    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    const component = await this.loadOwned(id, user);
     component.thumbnailUrl = thumbnailUrl;
     const saved = await this.components.save(component);
-    await this.cache.invalidateTags(`component:${id}`, 'feed:trending');
-    // Fire-and-forget reachability check. Failure doesn't block the
-    // save — a broken URL is logged by the worker and surfaced via
-    // observability, not via the user-facing 200/5xx response.
+    if (!component.isDraft) {
+      await this.cache.invalidateTags(`component:${id}`, 'feed:trending');
+    }
     await this.thumbnails.enqueue({ componentId: id, thumbnailUrl });
     return saved;
   }
 
-  // ────────────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────────────────
   // helpers
-  // ────────────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────────────────
+
+  private async loadOwned(id: string, user: AuthUser): Promise<Component> {
+    const component = await this.components.findOne({ where: { id } });
+    if (!component) throw new NotFoundException('Component not found');
+    if (component.authorId !== user.id) throw new NotFoundException('Component not found');
+    return component;
+  }
+
+  private async updateDraftVersion(
+    component: Component,
+    dto: { code?: string; dependencies?: Record<string, string> },
+  ): Promise<boolean> {
+    if (!component.currentVersionId) return false;
+    if (dto.code === undefined && dto.dependencies === undefined) return false;
+    const version = await this.versions.findOne({ where: { id: component.currentVersionId } });
+    if (!version) return false;
+    let changed = false;
+    if (dto.code !== undefined) { version.code = dto.code; changed = true; }
+    if (dto.dependencies !== undefined) version.dependencies = dto.dependencies;
+    await this.versions.save(version);
+    return changed;
+  }
+
+  private async replaceTags(componentId: string, tagSlugs: string[]): Promise<void> {
+    await this.dataSource.transaction(async (trx) => {
+      await trx.getRepository(ComponentTag).delete({ componentId });
+      if (tagSlugs.length) await this.attachTags(trx, componentId, tagSlugs);
+    });
+  }
+
+  private async applyMetadata(
+    component: Component,
+    dto: {
+      name?: string;
+      description?: string;
+      framework?: ComponentFramework;
+      category?: string;
+      isPublic?: boolean;
+    },
+  ): Promise<boolean> {
+    let changed = false;
+    if (dto.name && dto.name !== component.name) {
+      component.name = dto.name;
+      component.slug = await this.findUniqueSlug(component.authorId, this.slugify(dto.name), component.id);
+      changed = true;
+    }
+    if (dto.description !== undefined && (dto.description ?? null) !== component.description) {
+      component.description = dto.description ?? null;
+      changed = true;
+    }
+    if (dto.framework && dto.framework !== component.framework) {
+      component.framework = dto.framework;
+      changed = true;
+    }
+    if (dto.category !== undefined) component.category = dto.category ?? null;
+    if (dto.isPublic !== undefined) component.isPublic = dto.isPublic;
+    return changed;
+  }
 
   private async attachTags(
     trx: import('typeorm').EntityManager,
@@ -355,7 +428,7 @@ export class ComponentsService {
       .insert(all.map((t) => ({ componentId, tagId: t.id })))
       .catch((err) => {
         if (err instanceof QueryFailedError && (err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
-          return; // tag already attached, idempotent
+          return;
         }
         throw err;
       });

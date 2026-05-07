@@ -69,4 +69,11 @@ export class CreateComponentDto {
   @IsString({ each: true })
   @MaxLength(40, { each: true })
   tagSlugs?: string[];
+
+  /** When true the component is saved as a draft and not visible in any feed.
+   *  Call POST /components/:id/publish to make it live. */
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
 }
